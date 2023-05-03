@@ -1,0 +1,20 @@
+clear
+close all
+load  dout.txt
+load  vout.txt
+load  tdout.txt
+
+h=0.002;  % sampling interval (seconds)
+N=length(dout);
+
+t=0:h:h*(N-1);
+
+dv = zeros(1,N)
+for k=2:N,
+    dv(k) = (vout(k)-vout(k-1))/h;
+end
+
+figure('Name',"Samples")
+plot(t,dout,'b-o',t,vout,'r-+',t,dv,'')
+figure('Name',"timediff")
+plot(t(2:N),tdout(2:N),'b-o')
