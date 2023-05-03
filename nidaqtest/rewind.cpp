@@ -84,7 +84,7 @@ int main()
 
 		
 	float Kp = 5;
-	float Ti = .08;// 0.1875;
+	float Ti = .1;// 0.1875;
 	float Ki = Kp/Ti;
 	float Kmult = .5;
 
@@ -222,13 +222,13 @@ int main()
 
 
 #else  // position loop
-			if (ncount % 10 == 0)  // run at 40 Hz
+			if (ncount % 10 == 0)  
 			{
 				/// Edge*eg_meters-per-volt*lvdt_volts_per_meter is new desired reference for inner loop
 				perr = edgef * EDGEERR2LVDTVREF*Kmult;
 			}
 
-			if (ncount % 10 == 0)  // run at 40 Hz
+			if (ncount % 10 == 0)  
 			{
 				Ki = Kp / Ti;
 				// desired rack position is current PLUS edge delta...
