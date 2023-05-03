@@ -3,8 +3,10 @@ close all
 load  dout.txt
 load  vout.txt
 load  tdout.txt
+load  egout.txt
+load eout.txt
 
-h=1/100;  % sampling interval (seconds)
+h=1/400;  % sampling interval (seconds)
 N=length(dout);
 
 t=0:h:h*(N-1);
@@ -12,25 +14,25 @@ t=0:h:h*(N-1);
 dv = zeros(1,N);
 dvf = zeros(1,N);
 
-for k=2:N,
-    dv(k) = (dout(k)-dout(k-1))/h;
-end
-
-flen=10
-for k=flen:N,
-    dvf(k) = sum(dv(k-flen+1:k))/flen;
-end
 
 
-
-figure('Name',"Samples")
+figure('Name',"Raw and filtered output")
 %plot(t,dout,'b-o',t,vout,'r-+',t,dv,'g')
 %plot(t,dout,'b-o',t,vout,'r-+')
-plot(t,dout,'b-o');
+plot(t,dout,'r-o',t,vout,'b-');
+legend('raw','filtered')
 
-figure('Name',"dlvdt")
-plot(t,dv,'r-o',t,dvf,'b');
+figure('Name',"Rack Error")
+%plot(t,dout,'b-o',t,vout,'r-+',t,dv,'g')
+%plot(t,dout,'b-o',t,vout,pwd'r-+')
+plot(t,eout/80,'r-');
+
+figure('Name',"Edge Guide")
+%plot(t,dout,'b-o',t,vout,'r-+',t,dv,'g')
+%plot(t,dout,'b-o',t,vout,pwd'r-+')
+plot(t,egout,'b-o');
 
 
-%figure('Name',"timediff")
-%plot(t(2:N),tdout(2:N),'b-o')
+
+figure('Name',"timediff")
+plot(t(2:N),tdout(2:N),'b-o')

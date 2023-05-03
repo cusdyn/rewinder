@@ -10,13 +10,13 @@
 
 #define DAQmxErrChk(functionCall) if( DAQmxFailed(error=(functionCall)) ) goto Error; else
 
-#define SAMPLE_RATE 100
+#define SAMPLE_RATE 400
 #define PERFORMANCE_COUNTS  10000000 
 
 void sleepfor(LARGE_INTEGER from, long performance_clicks);
-static int save_data(const char* fname, double* data, int num);
+static int save_data(const char* fname, float* data, int num);
 
-#define DURATION    60  // seconds
+#define DURATION    80  // seconds
 #define RECORDLENGTH (SAMPLE_RATE*DURATION)
 
 #define RACK_LEFT_VOLTAGE  4.9
@@ -29,6 +29,10 @@ static int save_data(const char* fname, double* data, int num);
 
 #define POSREF =5  // volt of slide output
 
+#define NESTED 0
+
+#define EDGEERR2LVDTVREF (0.0256)
+
 int main()
 {
 	int32       error = 0;
@@ -38,9 +42,11 @@ int main()
 	int32       read;
 	char        errBuff[2048] = { '\0' };
 
-	float64     dout[RECORDLENGTH];
-	float64     vout[RECORDLENGTH];
-	float64     tdout[RECORDLENGTH];
+	float     dout[RECORDLENGTH];
+	float     vout[RECORDLENGTH];
+	float     egout[RECORDLENGTH];
+	float     tdout[RECORDLENGTH];
+	float     eout[RECORDLENGTH];
 
 	float64     sample[2];
 
@@ -60,21 +66,38 @@ int main()
 	// rack variables
 	float64  rack[2];
 	float64  edge;
+	float64  edgef;
+	float64  rackf;
+
 	float    dr = 0;   // rack derivative
+	float    drf = 0;   // rack derivative filtered
 
 	float    ui = 0;
 	float    u = 0;
-	float64  cmd=RACK_REST_VOLTAGE;;
-	float    rref=0;
-	float    pref=5;
+	float64  cmd=RACK_REST_VOLTAGE;
+	float64  pcmd = 0;
+	float    perr=0;
+	float    pref=6;
 	float	 err=0;
 
-	// gains
-	float Ke = 1/3150;
-	float Ki = 15;
-	float Kp = 12;
+	float rref = 5.0;
+
+		
+	float Kp = 5;
+	float Ti = .08;// 0.1875;
+	float Ki = Kp/Ti;
+	float Kmult = .5;
 
 	bool servo = false;
+
+	Boxcar bcf;
+	BoxcarLong ef;
+	Boxcar rf;
+
+
+	memset(&bcf, 0, sizeof(bcf));  // zero the filter
+	memset(&ef, 0, sizeof(ef));  // zero the filter
+	memset(&rf, 0, sizeof(rf));  // zero the filter
 
 	/*********************************************/
 	// DAQmx Configure Code
@@ -131,34 +154,25 @@ int main()
 				servo = false;
 			else if (c == 't')
 			{
-				Kp += 1;
-				printf("Kp=%3.1f\n", Kp);
+				Kp += 0.5;
+				printf("Kp=%3.3f\n", Kp);
 			}
 			else if (c == 'g')
 			{
-				Kp -= 1;
-				printf("Kp=%3.1f\n", Kp);
+				Kp -= 0.5;
+				printf("Kp=%3.3f\n", Kp);
 			}
 			else if (c == 'y')
 			{
-				Ki += 1;
-				printf("Ki=%3.1f\n", Ki);
+				Kmult += .1;
+				printf("Kmult=%3.1f Kp=%3.3f\n", Kmult, Kp);
 			}
 			else if (c == 'h')
 			{
-				Ki -= 1;
-				printf("Ki=%3.1f\n", Ki);
+				Kmult -= .1;
+				printf("Kmult=%3.1f Kp=%3.3f\n", Kmult,Kp);
 			}
-			else if (c == 'r')
-			{
-				Ke += 0.001;
-				printf("Ke=%3.1f\n", Ke);
-			}
-			else if (c == 'f')
-			{
-				Ke -= 1;
-				printf("Ke=%3.1f\n", Ke);
-			}
+	
 		}
 
 
@@ -169,34 +183,94 @@ int main()
 		rack[1] = sample[0];
 		edge    = sample[1];
 		dr = (rack[1] - rack[0])*SAMPLE_RATE;
+		drf = BoxCarFilter(&bcf, dr, FLEN);
+		edgef = BoxCarFilterLong(&ef, edge, LONGFLEN);
+		rackf = BoxCarFilter(&rf, rack[1], FLEN);
+
 		rack[0] = rack[1];
 
 		if(servo == true)
 		{
 			// Edge ref error supplies rref: rack reference... for now take it as rack position
 			//rref = pref - rack[1];  // position error
-
+#if NESTED
 			// run outer loop 10 times slower
-			if (ncount % 10 == 0)
+			if (ncount % 20 == 0)
 			{
-				rref = edge * Ke;
+				Ki = Kmult * Kp;
+
+				perr = -edgef;
+				u = perr * Kp;
+
+				ui = ui + Ki * perr / SAMPLE_RATE;
+
+				if (ui < CMD_MIN)
+					ui = CMD_MIN;
+				else if (ui > CMD_MAX)
+					ui = CMD_MAX;
+
+				printf("Kp=%3.3f Ki=%3.3f perr=%3.3f u=%3.3f ui=%3.3f  cmd=%3.3f\n", Kp, Ki, perr, u, ui,cmd);
+
+				pcmd = u + ui;
+				
 			}
 
 			//err = rref - dr; // speed error
-			err = pref - rack[1];
+			err = pcmd - drf;
+			
+			cmd = err;    // unity gain feedback on inner loop
 
-			u = Kp * err;
-			ui = ui + Ki * err / SAMPLE_RATE;
-			if (ui < CMD_MIN)
-				ui = CMD_MIN;
-			else if (ui > CMD_MAX)
-				ui = CMD_MAX;
 
-			cmd = u+ui;
-			cmd = max(cmd, CMD_MIN);
-			cmd = min(cmd, CMD_MAX);
+#else  // position loop
+			if (ncount % 10 == 0)  // run at 40 Hz
+			{
+				/// Edge*eg_meters-per-volt*lvdt_volts_per_meter is new desired reference for inner loop
+				perr = edgef * EDGEERR2LVDTVREF*Kmult;
+			}
 
-			cmd = cmd + CMD_MIDRANGE;
+			if (ncount % 10 == 0)  // run at 40 Hz
+			{
+				Ki = Kp / Ti;
+				// desired rack position is current PLUS edge delta...
+
+	
+
+				pref = rackf - perr;
+
+				//err = pref - rackf;
+				err = rref - rackf;
+
+				u = Kp * err;
+				ui = ui + Ki * err / SAMPLE_RATE;
+				if (ui < CMD_MIN)
+					ui = CMD_MIN;
+				else if (ui > CMD_MAX)
+					ui = CMD_MAX;
+#endif
+				cmd = u + ui;
+
+				
+				/*
+				if (cmd < 0)
+					cmd -= 0.07;
+				else if (cmd > 0)
+					cmd += 0.35;
+				*/
+
+				cmd = max(cmd, CMD_MIN);
+				cmd = min(cmd, CMD_MAX);
+
+				cmd = cmd + CMD_MIDRANGE;
+			}
+
+			if (ncount % 100 == 0)
+			{
+				printf("Kp=%3.3f Ki=%3.3f err=%3.3f u=%3.3f ui=%3.3f  cmd=%3.3f\n", Kp, Ki, err, u, ui, cmd);
+			}
+		}
+		else
+		{
+		//	cmd = RACK_REST_VOLTAGE;
 		}
 
 		// Jog override
@@ -222,8 +296,10 @@ int main()
 		// update log records
 		if (ncount < RECORDLENGTH)
 		{
-			dout[ncount] = err;
-			vout[ncount] = sample[1];
+			dout[ncount]  = rack[1];
+			vout[ncount]  = rackf;
+			egout[ncount] = edgef;
+			eout[ncount]  = err;
 		}
 		
 
@@ -259,7 +335,8 @@ int main()
 	save_data("dout", dout, min(ncount, RECORDLENGTH));
 	save_data("vout", vout, min(ncount, RECORDLENGTH));
 	save_data("tdout", tdout, min(ncount, RECORDLENGTH));
-
+	save_data("egout", egout, min(ncount, RECORDLENGTH));
+	save_data("eout", eout, min(ncount, RECORDLENGTH));
 
 	//	printf("Acquired %d points\n", (int)read);
 
@@ -304,7 +381,7 @@ void sleepfor(LARGE_INTEGER from, long performance_clicks)
 }
 
 
-static int save_data(const char * fname, double* data, int num)
+static int save_data(const char * fname, float* data, int num)
 {
 	FILE* datafile = NULL;
 	int i;
