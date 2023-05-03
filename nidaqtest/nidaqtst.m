@@ -5,6 +5,7 @@ load  vout.txt
 load  tdout.txt
 load  egout.txt
 load eout.txt
+load cout.txt
 
 h=1/400;  % sampling interval (seconds)
 N=length(dout);
@@ -25,13 +26,17 @@ legend('raw','filtered')
 figure('Name',"Rack Error")
 %plot(t,dout,'b-o',t,vout,'r-+',t,dv,'g')
 %plot(t,dout,'b-o',t,vout,pwd'r-+')
-plot(t,eout/80,'r-');
+plot(t,eout/80,'r-',t,(cout-5)/1000,'k-');
 
 figure('Name',"Edge Guide")
 %plot(t,dout,'b-o',t,vout,'r-+',t,dv,'g')
 %plot(t,dout,'b-o',t,vout,pwd'r-+')
 plot(t,egout,'b-o');
 
+figure('Name',"command")
+%plot(t,dout,'b-o',t,vout,'r-+',t,dv,'g')
+%plot(t,dout,'b-o',t,vout,pwd'r-+')
+plot(t,(cout-5),'k-o');
 
 
 figure('Name',"timediff")

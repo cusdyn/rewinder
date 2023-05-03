@@ -47,6 +47,8 @@ int main()
 	float     egout[RECORDLENGTH];
 	float     tdout[RECORDLENGTH];
 	float     eout[RECORDLENGTH];
+	float     cout[RECORDLENGTH];
+
 
 	float64     sample[2];
 
@@ -84,9 +86,9 @@ int main()
 
 		
 	float Kp = 5;
-	float Ti = .1;// 0.1875;
+	float Ti = .9;// 0.1875;
 	float Ki = Kp/Ti;
-	float Kmult = .5;
+	float Kmult = .3;
 
 	bool servo = false;
 
@@ -237,8 +239,8 @@ int main()
 
 				pref = rackf - perr;
 
-				//err = pref - rackf;
-				err = rref - rackf;
+				err = pref - rackf;
+				//err = rref - rackf;
 
 				u = Kp * err;
 				ui = ui + Ki * err / SAMPLE_RATE;
@@ -300,6 +302,7 @@ int main()
 			vout[ncount]  = rackf;
 			egout[ncount] = edgef;
 			eout[ncount]  = err;
+			cout[ncount] = cmd;
 		}
 		
 
@@ -337,6 +340,7 @@ int main()
 	save_data("tdout", tdout, min(ncount, RECORDLENGTH));
 	save_data("egout", egout, min(ncount, RECORDLENGTH));
 	save_data("eout", eout, min(ncount, RECORDLENGTH));
+	save_data("cout", cout, min(ncount, RECORDLENGTH));
 
 	//	printf("Acquired %d points\n", (int)read);
 

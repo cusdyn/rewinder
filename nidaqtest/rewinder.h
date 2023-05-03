@@ -1,6 +1,6 @@
 #pragma once
 
-#define FLEN 10
+#define FLEN 1
 typedef struct {
 	double  d[FLEN];
 	int     in;
