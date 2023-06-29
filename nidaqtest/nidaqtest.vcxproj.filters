@@ -21,9 +21,15 @@
     <ClCompile Include="rewinder.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="IIRdf2filt.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="rewinder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="IIRdf2filt.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
