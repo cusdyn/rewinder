@@ -7,6 +7,7 @@ load  drack.txt
 load  edgeerr.txt
 load  speederr.txt
 load  tdout.txt
+load cmdout.txt
 
 h=1/400;  % sampling interval (seconds)
 N=length(edge);
@@ -25,3 +26,12 @@ plot(t,edge,'b-o');
 
 figure('Name',"timediff")
 plot(t(2:N),tdout(2:N),'b-o')
+
+
+figure('Name',"Errors")
+plot(t,edgeerr,'r',t,speederr,'b',t,cmdout-5,'m')
+legend('edge err','speed err','cmd')
+
+figure('Name',"noise check")
+plot(t,rack,'r',t,edge,'b')
+legend('rack','edge')

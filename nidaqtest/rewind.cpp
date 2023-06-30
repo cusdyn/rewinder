@@ -12,15 +12,16 @@
 #define DAQmxErrChk(functionCall) if( DAQmxFailed(error=(functionCall)) ) goto Error; else
 
 #define SAMPLE_RATE         400
+//#define LOG_RATE            10
 #define PERFORMANCE_COUNTS  10000000 
 
 void sleepfor(LARGE_INTEGER from, long performance_clicks);
 static int save_data(const char* fname, float* data, int num);
 
-#define DURATION     80  // seconds
+#define DURATION     60  // seconds
 #define RECORDLENGTH (SAMPLE_RATE*DURATION)
 
-#define RACK_LEFT_VOLTAGE  4.9
+#define RACK_LEFT_VOLTAGE  4.0
 #define RACK_REST_VOLTAGE  5.0
 #define RACK_RIGHT_VOLTAGE 5.5
 
@@ -45,6 +46,31 @@ const double b[] = { 0.000031238976917082,
 					 0.000124955907668330,
 					 0.000031238976917082 };
 
+// Fc==10 Hz
+const double as[] = { 1.000000000000000,
+					 -3.794791103079405,
+					 5.405166861726164,
+					 -3.424747347274239,
+					 0.814405997727277 };
+
+const double bs[] = {0.0000021505687372881,
+					 0.0000086022749491522,
+					 0.0000129034124237283,
+					 0.0000086022749491522,
+					 0.0000021505687372881 };
+
+// Fc=5 Hz
+const double ass[] = {1.000000000000000,
+					  -3.897385982468392,
+					  5.697390003949064,
+					  -3.702467148464776,
+					  0.902465387346561};
+
+const double bss[] = {0.000000141272653624686,
+					  0.000000565090614498745,
+					  0.000000847635921748118,
+					  0.000000565090614498745,
+	                  0.000000141272653624686 };
 int main()
 {
 	int32       error = 0;
@@ -62,7 +88,7 @@ int main()
 	float     speederreout[RECORDLENGTH];
 	float     tdout[RECORDLENGTH];
 	float     drout[RECORDLENGTH];
-
+	float     cmdout[RECORDLENGTH];
 
 	float64     sample[2];
 
@@ -79,6 +105,7 @@ int main()
 	// rack variables
 	float64  rack[2];
 	float64  edge;
+	float    ledge;
 	float64  rackf;
 
 	float    drack = 0;   // rack derivative
@@ -86,6 +113,7 @@ int main()
 	float    ui = 0;
 	float    u = 0;
 	float64  cmd=RACK_REST_VOLTAGE;
+	float64  fcmd = cmd;
 	float64  pcmd = 0;
 	float    perr=0;
 	float    serr = 0;
@@ -94,10 +122,9 @@ int main()
 
 	float rref = 5.0;
 
-	float Kpe = 1;  // position loop error
-	float Kp  = 8;
-	float Ti  = .5; // 0.1875;
-	float Ki  = Kp/Ti;
+	float Kpe = .025;  // position loop gain maps edge guide V/m to lvdt V/m, unity gain
+	float Kp  = 1.35;	//float Ti  = .5; // 0.1875;	
+	float Ki = 10	; // Kp / Ti;
 	float Kmult = (float)0.2;
 
 	bool servo = false;
@@ -105,8 +132,13 @@ int main()
 	int N = sizeof(a) / sizeof(double);
 
 	IIRdf2filt* rackfilt;
-	rackfilt = new IIRdf2filt(N, a, b);
+	rackfilt = new IIRdf2filt(N, as, bs);
 
+	IIRdf2filt* edgefilt;
+	edgefilt = new IIRdf2filt(N, a, b);
+
+	IIRdf2filt* cmdfilt;
+	cmdfilt = new IIRdf2filt(N, a, b);
 
 	/*********************************************/
 	// DAQmx Configure Code
@@ -134,7 +166,16 @@ int main()
 	DAQmxErrChk(DAQmxStartTask(taskHandle));
 	DAQmxErrChk(DAQmxStartTask(taskHandleAo));
 
-
+	//initialize...
+#if 1
+	DAQmxReadAnalogF64(taskHandle, 1, 0, DAQmx_Val_GroupByChannel, sample, 2, &read, NULL);
+	
+		edge = sample[1];
+		ledge = edge;
+		rack[0] = sample[0];
+		rack[1] = rack[0];
+	
+#endif
 
 	start = clock();  // start the loop clock start time
 	last = start;
@@ -162,23 +203,23 @@ int main()
 				servo = false;
 			else if (c == 't')
 			{
-				Kp += 0.5;
+				Kp += 0.1;
 				printf("Kp=%3.3f\n", Kp);
 			}
 			else if (c == 'g')
 			{
-				Kp -= 0.5;
+				Kp -= 0.1;
 				printf("Kp=%3.3f\n", Kp);
 			}
 			else if (c == 'y')
 			{
-				Kmult += .01;
-				printf("Kmult=%3.1f Kp=%3.3f\n", Kmult, Kp);
+				Ki += .1;
+				printf("Ki=%3.1f Kp=%3.3f\n", Ki, Kp);
 			}
 			else if (c == 'h')
 			{
-				Kmult -= .01;
-				printf("Kmult=%3.1f Kp=%3.3f\n", Kmult,Kp);
+				Ki -= .1;
+				printf("Ki=%3.1f Kp=%3.3f\n", Ki,Kp);
 			}
 	
 		}
@@ -193,8 +234,19 @@ int main()
 		}
 
 		rack[1] = sample[0];
+
 		edge    = sample[1];
-		
+#if 0
+		if (edge - ledge > 5)
+		{
+			edge = ledge;
+		}
+		else {
+			ledge = edge;
+		}
+#endif
+		edge = edgefilt->FilterSample(edge);
+
 		// filter rack feedback for clean(er) derivative?...
 		rackf = rackfilt->FilterSample(rack[1]);
 		//rackf = rack[1];
@@ -207,11 +259,11 @@ int main()
 			//rref = pref - rack[1];  // position error
 #if NESTED
 			// run outer loop 10 times slower
-			if (ncount % 10 == 0)
-			{
+			//if (ncount % 10 == 0)
+			//{
 				// position error
 				perr = -edge*Kpe;	
-			}
+			//}
 
 			// position error ref input to inner speed loop, filtered drack/dt as feedback.
 			serr = perr - drack;
@@ -227,7 +279,13 @@ int main()
 
 			cmd = u + ui;
 
+			cmd = max(cmd, CMD_MIN);
+			cmd = min(cmd, CMD_MAX);
 
+			cmd = cmd + CMD_MIDRANGE;
+
+			//fcmd = cmdfilt->FilterSample(cmd);
+			//cmd = fcmd;
 #else  // position loop
 			if (ncount % 10 == 0)  
 			{
@@ -304,6 +362,7 @@ int main()
 				edgeerreout[dataoutcnt]  = perr;
 				speederreout[dataoutcnt] = serr;
 				drout[dataoutcnt]        = drack;
+				cmdout[dataoutcnt] = cmd;
 				dataoutcnt++;
 			}
 		}
@@ -345,6 +404,7 @@ int main()
 	save_data("edgeerr", edgeerreout, dataoutcnt);
 	save_data("speederr", speederreout, dataoutcnt);
 	save_data("tdout", tdout, dataoutcnt);
+	save_data("cmdout", cmdout, dataoutcnt);
 
 	//	printf("Acquired %d points\n", (int)read);
 
