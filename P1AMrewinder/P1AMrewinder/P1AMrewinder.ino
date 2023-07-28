@@ -1,7 +1,7 @@
 /****************************************************************************************************************************
-  TimerInterruptTest.ino
+  P1AMrewinder.ino
   For SAMD boards
-  Written by Khoi Hoang
+  Mike Timmons ( derived from Written by Khoi Hoang as...)
   
   Built by Khoi Hoang https://github.com/khoih-prog/SAMD_TimerInterrupt
   Licensed under MIT license
@@ -60,18 +60,30 @@
 #include "SAMDTimerInterrupt.h"
 #include <P1AM.h>
 #include <P1_HSC.h>
+#include <LibPrintf.h>
 
 #ifndef LED_BUILTIN
   #define LED_BUILTIN       13
 #endif
 
+#define P104AD_MODULE_NUM 1
+#define COUNT_RANGE 65535
+
+#define LVDT_VIN_CHANNEL 1
+#define EDGE_VIN_CHANNEL 2
+#define CMD_MAX  5.0
+#define CMD_MIDRANGE 5.0
+
+#define LVDT_VOLTS(x)  (10.0*x/COUNT_RANGE)
+#define EDGE_VOLTS(x)  (20.0*x/COUNT_RANGE)
+#define CMD_COUNTS(x)   (x*4095/10.0)
+#define DLVDT(x1,x2)     ((x2-x1)/(0.01))
 unsigned int SWPin = 7;
 
 // TC3, TC4, TC5 max permissible TIMER_INTERVAL_MS is 1398.101 ms, larger will overflow, therefore not permitted
 // Use TCC, TCC1, TCC2 for longer TIMER_INTERVAL_MS
-#define TIMER_INTERVAL_MS        5
-
-#define TIMER_DURATION_MS        5000
+#define SAMPLE_RATE              100
+#define TIMER_INTERVAL_MS        (1000/SAMPLE_RATE)
 
 volatile uint32_t preMillisTimer = 0;
 
@@ -79,6 +91,34 @@ float freq=5.0;
 float amp=2000;
 float y = 0;
 int   ticks=0;
+
+float lvdtVin[2];
+float ddtLvdt = 0;
+float edgeVin = 0.0;
+
+float Kpe = .0254; 
+float perr=0.0;
+float serr=0.0;
+float u=0.0;
+float ui=0.0;
+float cmd=0.0;
+
+// gain scaling for web speed
+float Kpmax = 7;
+float wcmax = 2;
+float wcdes = wcmax;  // initialize desired wc and don't set it until speed is non-zero
+float tdelay = 0;
+float bz = 0.0842;   // zero location
+float Kp=0;
+float Ki=0;
+
+/* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
+ *  Channel 1=0-10V
+ *  Channel 2=+-10V
+ *  Channel 3=+-10V
+ *  Channel 4=+-10V
+ */
+const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00, 0x23, 0x00 };
 
 ///////////////////////////////////////////////
 
@@ -117,12 +157,41 @@ SAMDTimer ITimer(SELECTED_TIMER);
 void TimerHandler()
 {
   static bool toggle = false;
- 
-  P1.readAnalog(1,2);
-  P1.readAnalog(1,3);
+  // Read
+  lvdtVin[1] = LVDT_VOLTS(P1.readAnalog(1,LVDT_VIN_CHANNEL));
+  edgeVin    = EDGE_VOLTS(P1.readAnalog(1,EDGE_VIN_CHANNEL));
 
-  y = amp + amp*sin(6.28*freq*ticks*0.005);
-  P1.writeAnalog(y, 3, 2); //writes analog data to P1 output module
+  // LVDT rate
+  ddtLvdt = DLVDT(lvdtVin[0],lvdtVin[1]);
+  lvdtVin[0] = lvdtVin[1];  // propagate LVDT state
+
+  perr = -edgeVin*Kpe;   // map edge guide voltage to LVDT equivalent
+
+
+	// P term
+	u = Kp*perr;
+
+	// I term
+	ui = ui + (Ki*perr)/SAMPLE_RATE;
+
+  // clamp integrator
+  ui = max(ui, -CMD_MAX);
+  ui = min(ui, CMD_MAX);
+
+  // speed error
+	serr = (u + ui) - ddtLvdt;
+
+	// unity gain on inner loop...consider tach feedback gain?
+	cmd = serr;
+
+	cmd = max(cmd, -CMD_MAX);
+	cmd = min(cmd, CMD_MAX);
+
+	cmd = cmd + CMD_MIDRANGE;
+
+//  y = amp + amp*sin(6.28*freq*ticks*0.005);
+  P1.writeAnalog(CMD_COUNTS(cmd), 3, 2); //writes analog data to P1 output module
+
   ticks++;
 
 #if (TIMER_INTERRUPT_DEBUG > 0)
@@ -139,9 +208,7 @@ void TimerHandler()
     preMillisTimer = curMillis;
 #endif
 
- 
   //timer interrupt toggles LED_BUILTIN
-  digitalWrite(LED_BUILTIN, toggle);
   digitalWrite(PIN_A1,toggle);
   toggle = !toggle;
 }
@@ -151,13 +218,13 @@ void setup()
 
    while (!P1.init()){ 
     ; //Wait for Modules to Sign on   
-
     //GCLK->GENCTRL
   }
 
-  pinMode(LED_BUILTIN, OUTPUT);
-   
-  pinMode(PIN_A1, OUTPUT);
+  // Configure A2D
+  Serial.print(F("\nP1-04AD Config:")); Serial.println(P1.configureModule(P1_04AD_CONFIG, P104AD_MODULE_NUM));
+  
+  gpio_config();  
 
   Serial.begin(115200);
   while (!Serial && millis() < 5000);
@@ -176,35 +243,42 @@ void setup()
   }
   else
     Serial.println(F("Can't set ITimer. Select another freq. or timer"));
+
+  // Initialize controller
+  lvdtVin[0] = LVDT_VOLTS(P1.readAnalog(1,LVDT_VIN_CHANNEL));
+
+	Kp = Kpmax;  	
+	Ki = bz*Kp;  // Kp / Ti;
+
+
 }
 
 void loop()
 {
   static unsigned long lastTimer   = 0; 
   static bool timerStopped         = false;
-  
-  /*
-  if (millis() - lastTimer > TIMER_DURATION_MS)
-  {
-    lastTimer = millis();
+  static bool ledToggle            = true;
+  char rx_byte = 0;
 
-    if (timerStopped)
-    {
-      preMillisTimer = millis();
-      Serial.print(F("Start ITimer, millis() = ")); Serial.println(preMillisTimer);
-      ITimer.restartTimer();
-    }
-    else
-    {
-      Serial.print(F("Stop ITimer, millis() = ")); Serial.println(millis());
-      ITimer.stopTimer();
-    }
+  if (Serial.available() > 0) {    // is a character available?
+    rx_byte = Serial.read();       // get the character
     
-    timerStopped = !timerStopped;
-  }
-  */
+    Serial.print("rx_byte:"); Serial.println(rx_byte);
+  } 
 
- 
+  digitalWrite(LED_BUILTIN, ledToggle);
 
-  delay(100);
+  Serial.print(F("Vlvdt:")); Serial.println(lvdtVin[1]);
+  Serial.print(F("dVlvdt:")); Serial.println(ddtLvdt);
+  Serial.print(F("Vedge:")); Serial.println(edgeVin);
+  Serial.print(F("cmd:")); Serial.println(cmd);
+  
+  ledToggle = !ledToggle;
+  delay(1000);
+}
+
+void gpio_config(void)
+{
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PIN_A1, OUTPUT);
 }
