@@ -1,18 +1,25 @@
 #include "RewinderPlantSim.h"
 
 
-RewinderPlantSim::RewinderPlantSim(int loglen)
+RewinderPlantSim::RewinderPlantSim(int loglen, float lvdtMidRange)
 {
 	maxlogLen = loglen;
 	memset(u, 0, 3 * sizeof(double));
 	memset(y, 0, 3 * sizeof(double));
 
 	KlvdtToEg = KEG / KL;
+
+	lvdtVmid = lvdtMidRange;
 }
 
 RewinderPlantSim::~RewinderPlantSim()
 {
 
+}
+
+void  RewinderPlantSim::SetVedge(float veg)
+{
+	vEdge = veg;
 }
 
 float RewinderPlantSim::CmdIn(float cmd)
@@ -76,16 +83,21 @@ float RewinderPlantSim::CmdIn(float cmd)
 		lvdtOut.push_back(y[2]);
 	}
 
+	//yout += lvdtVmid;
+
 	return yout;
 }
 
 float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 {
 	float veg;
-	// given LVDT voltage, model the Edge Guide.
-
+	// given LVDT voltage, model the Edge Guide equivalent.
 	veg = KlvdtToEg * vlvdt;
 
+	// you will model a delay here, but for now apply the lvdt equivalent immdiately
+
+	veg +=vEdge;
+	
 	// clamp it
 	veg = max(-EDGE_GUIDE_VSAT, veg);
 	veg = min(EDGE_GUIDE_VSAT, veg);

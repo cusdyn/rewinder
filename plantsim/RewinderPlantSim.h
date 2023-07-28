@@ -4,7 +4,7 @@
 
 #define MAX_LOG_LEN 1000000
 #define YYTESTSZ 10000
-#define VALVE_AMP_MIDRANGE (4.805) // 5 volts
+#define VALVE_AMP_MIDRANGE (5.0) // 5 volts
 
 #define KL  (8/0.1)          // LVDT volts-per-meter
 #define EGZ (0.125 * 0.0254) // (m)Edge guide active zone + -about null(0.125" each way)
@@ -16,15 +16,18 @@
 class RewinderPlantSim
 {
 public:
-	RewinderPlantSim(int loglen);
+	RewinderPlantSim(int loglen, float lvdtMidRange);
 	~RewinderPlantSim();
 	float CmdIn(float cmd);
 	float EdgeGuideModel(float vlvdt);
-	void LogFilesOut(void);
+	void  LogFilesOut(void);
+	void  SetVedge(float veg);
 private:
 	int ToFile(const char* fname, float* data, int num);
 	int maxlogLen;
 	float KlvdtToEg;
+	float lvdtVmid;
+	float vEdge;
 	std::vector<float> cmdIn;
 	std::vector<float> lvdtOut;
 	std::vector<float> edgeOut;

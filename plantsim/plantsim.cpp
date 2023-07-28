@@ -82,21 +82,23 @@
 #define AIN1                1
 #define LVDT_OUT            0
 #define EDGE_OUT            1
-
 #define ERROR -1
 
+#define LVDT_MID_VRANGE  (4.0)
+#define EDGE_MID_VRANGE  (0.0)
 
 #define IMPULSE_TEST 0
+
 int main()
 {
 	RealTime realTime(SAMPLE_RATE);
 	NiUsb    ni;
-	RewinderPlantSim rwSim(RECORDLENGTH);
+	RewinderPlantSim rwSim(RECORDLENGTH,LVDT_MID_VRANGE);
 
-	int aiTask = -1;
-	int aoTask = -1;
-	int      cycleCount = 0;
-	double samples[2];
+	int    aiTask = -1;
+	int    aoTask = -1;
+	int    cycleCount = 0;
+	double cmdin;
 	double vout[2];
 
 	// inisialize the 
@@ -104,7 +106,6 @@ int main()
 	if((aoTask = ni.InitializeTask()) == ERROR) return 0;
 
 	if(ni.AddVoltageChannel(aiTask, input, CMD_AIN, 0.0, 10.0)) return 0;
-	if(ni.AddVoltageChannel(aiTask, input, AIN1, 0.0, 10.0)) return 0;
 	if(ni.AddVoltageChannel(aoTask, output, LVDT_OUT, 0.0, 10.0))  return 0;
 	if(ni.AddVoltageChannel(aoTask, output, EDGE_OUT, -10, 10.0))  return 0;
 
@@ -114,6 +115,12 @@ int main()
 
 	realTime.Start();  // commence pseudo-real-time loop.
 
+	// output LVDT and EdgeGuide Sensor Voltages
+	vout[LVDT_OUT] = LVDT_MID_VRANGE;
+	vout[EDGE_OUT] = EDGE_MID_VRANGE;
+	ni.WriteMultiAout(aoTask, vout, 2);
+
+
 	while (1)
 	{
 
@@ -121,10 +128,32 @@ int main()
 		{
 			char c = _getch();
 
+			// exit
 			if (c == 'q')
 				break;
+
+			switch (c) 
+			{
+			case '0':
+				rwSim.SetVedge(0.0);
+				break;
+			case '1':
+				rwSim.SetVedge(-10.0);
+				break;
+			case '2':
+				rwSim.SetVedge(-5.0);
+				break;
+			case '3':
+				rwSim.SetVedge(5.0);
+				break;
+			case '4':
+				rwSim.SetVedge(10.0);
+				break;
+			default:
+				break;
+			}
 		}
-		int numRead = ni.ReadAin(aiTask, samples);
+		int numRead = ni.ReadAin(aiTask, &cmdin);
 
 #if IMPULSE_TEST
 		if (cycleCount == 0) {
@@ -134,10 +163,17 @@ int main()
 			vlvdt = rwSim.CmdIn(0.0);
 		}
 #else
-		vout[0] = rwSim.CmdIn(samples[0]);
+		// get AC (signed) component of LVDT output from plant model
+		vout[LVDT_OUT] = rwSim.CmdIn(cmdin);
 #endif
-		vout[1] = rwSim.EdgeGuideModel(vout[0]);
-		
+		vout[EDGE_OUT] = rwSim.EdgeGuideModel(vout[LVDT_OUT]);
+
+		// Add it to the mid-range
+		vout[LVDT_OUT] += LVDT_MID_VRANGE;
+
+//		vout[LVDT_OUT] = 2.0;
+//		vout[EDGE_OUT] = -1.0;
+
 		// output LVDT and EdgeGuide Sensor Voltages
 		ni.WriteMultiAout(aoTask, vout, 2);
 
