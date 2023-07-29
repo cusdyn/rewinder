@@ -16,7 +16,7 @@ xlim([0.1 100]);
 
 % zero-order hold equivalent
 
-h = 0.01;  % 10ms sampling time
+h = 0.005;  % 10ms sampling time
 
 H = tf(numc,denc);
 G = c2d(H,h,'zoh');

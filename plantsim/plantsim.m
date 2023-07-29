@@ -6,7 +6,7 @@ load cmd.txt
 load lvdt.txt
 load edge.txt
 
-fs = 100;
+fs = 200;
 N = length(lvdt);
 t=0:1/fs:(N-1)/fs;
 

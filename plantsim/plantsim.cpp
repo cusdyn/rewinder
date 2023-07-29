@@ -75,7 +75,7 @@
 %       N-sample impulse
 */
 
-#define SAMPLE_RATE         100
+#define SAMPLE_RATE         200
 #define DURATION			60  // seconds
 #define RECORDLENGTH		(SAMPLE_RATE*DURATION)
 #define CMD_AIN             0
