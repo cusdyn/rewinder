@@ -6,6 +6,7 @@ close all
 K = 20;  % Plant Gain: amplifier input to LVDT output
 a = 25;  % Plant bandwidth (rad/sec)
 
+
 numc = K;
 denc = [1 a 0];
 
