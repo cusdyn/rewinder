@@ -1,7 +1,7 @@
 #include "RewinderPlantSim.h"
 
 
-RewinderPlantSim::RewinderPlantSim(int loglen, float lvdtMidRange)
+RewinderPlantSim::RewinderPlantSim(int loglen)
 {
 	maxlogLen = loglen;
 	memset(u, 0, 3 * sizeof(double));
@@ -9,7 +9,8 @@ RewinderPlantSim::RewinderPlantSim(int loglen, float lvdtMidRange)
 
 	KlvdtToEg = KEG / KL;
 
-	lvdtVmid = lvdtMidRange;
+	pEdge = 0;  // relative to mid range
+	vEdge = LVDT_MID_VRANGE;
 }
 
 RewinderPlantSim::~RewinderPlantSim()
@@ -17,9 +18,13 @@ RewinderPlantSim::~RewinderPlantSim()
 
 }
 
-void  RewinderPlantSim::SetVedge(float veg)
+void  RewinderPlantSim::SetPedge(float peg)
 {
-	vEdge = veg;
+	// Set an Edge guide cener Position relative to nominal
+	pEdge = peg;
+
+	// this edge guide center positon in LVDT volt equivalents
+	vEdge = KL * peg + VALVE_AMP_MIDRANGE;
 }
 
 float RewinderPlantSim::CmdIn(float cmd)
@@ -83,20 +88,32 @@ float RewinderPlantSim::CmdIn(float cmd)
 		lvdtOut.push_back(y[2]);
 	}
 
-	//yout += lvdtVmid;
-
 	return yout;
 }
 
 float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 {
-	float veg;
-	// given LVDT voltage, model the Edge Guide equivalent.
-	veg = KlvdtToEg * vlvdt;
-
+	float veg;                // desired output.
+	float satlim = KL * EGZ;  // LVDT equivalent range to saturation of edge guide.
+#if 1
+	float dv = vlvdt-vEdge; // lvdt pos to edge-guide-equivalent center pos on lvdt
+	
+	if (dv > satlim) 
+	{
+		veg = EDGE_GUIDE_VSAT;
+	}
+	else if (dv < -satlim)
+	{
+		veg = -EDGE_GUIDE_VSAT;
+	}
+	else
+	{
+		veg = KlvdtToEg * dv;
+	}
+#else
+	veg = KlvdtToEg * (vlvdt - LVDT_MID_VRANGE);
+#endif
 	// you will model a delay here, but for now apply the lvdt equivalent immdiately
-
-	veg +=vEdge;
 	
 	// clamp it
 	veg = max(-EDGE_GUIDE_VSAT, veg);

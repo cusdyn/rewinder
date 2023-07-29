@@ -13,20 +13,23 @@
 
 #define EDGE_GUIDE_VSAT   (10.0)
 
+#define LVDT_MID_VRANGE  (4.0)
+#define EDGE_MID_VRANGE  (0.0)
+
 class RewinderPlantSim
 {
 public:
-	RewinderPlantSim(int loglen, float lvdtMidRange);
+	RewinderPlantSim(int loglen);
 	~RewinderPlantSim();
 	float CmdIn(float cmd);
 	float EdgeGuideModel(float vlvdt);
 	void  LogFilesOut(void);
-	void  SetVedge(float veg);
+	void  SetPedge(float peg);
 private:
 	int ToFile(const char* fname, float* data, int num);
 	int maxlogLen;
 	float KlvdtToEg;
-	float lvdtVmid;
+	float pEdge;
 	float vEdge;
 	std::vector<float> cmdIn;
 	std::vector<float> lvdtOut;

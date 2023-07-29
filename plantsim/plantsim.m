@@ -12,3 +12,4 @@ t=0:1/fs:(N-1)/fs;
 
 figure('Name','Dout')
 plot(t,cmd,'ro-',t,lvdt,'bo-',t,edge,'go-')
+legend('Vcmd','Vlvdt','Vedge')

@@ -84,8 +84,6 @@
 #define EDGE_OUT            1
 #define ERROR -1
 
-#define LVDT_MID_VRANGE  (4.0)
-#define EDGE_MID_VRANGE  (0.0)
 
 #define IMPULSE_TEST 0
 
@@ -93,7 +91,7 @@ int main()
 {
 	RealTime realTime(SAMPLE_RATE);
 	NiUsb    ni;
-	RewinderPlantSim rwSim(RECORDLENGTH,LVDT_MID_VRANGE);
+	RewinderPlantSim rwSim(RECORDLENGTH);
 
 	int    aiTask = -1;
 	int    aoTask = -1;
@@ -135,19 +133,19 @@ int main()
 			switch (c) 
 			{
 			case '0':
-				rwSim.SetVedge(0.0);
+				rwSim.SetPedge(0.0);   // m
 				break;
 			case '1':
-				rwSim.SetVedge(-10.0);
+				rwSim.SetPedge(-0.05); // m
 				break;
 			case '2':
-				rwSim.SetVedge(-5.0);
+				rwSim.SetPedge(-0.001); // m
 				break;
 			case '3':
-				rwSim.SetVedge(5.0);
+				rwSim.SetPedge(0.001);  // m
 				break;
 			case '4':
-				rwSim.SetVedge(10.0);
+				rwSim.SetPedge(0.05);   // m
 				break;
 			default:
 				break;
@@ -163,14 +161,16 @@ int main()
 			vlvdt = rwSim.CmdIn(0.0);
 		}
 #else
-		// get AC (signed) component of LVDT output from plant model
+		// get AC (signed) component of LVDT output from plant model as though
+		// the LVDT was signed output
 		vout[LVDT_OUT] = rwSim.CmdIn(cmdin);
 #endif
-		vout[EDGE_OUT] = rwSim.EdgeGuideModel(vout[LVDT_OUT]);
-
 		// Add it to the mid-range
 		vout[LVDT_OUT] += LVDT_MID_VRANGE;
 
+		vout[EDGE_OUT] = rwSim.EdgeGuideModel(vout[LVDT_OUT]);
+
+		
 //		vout[LVDT_OUT] = 2.0;
 //		vout[EDGE_OUT] = -1.0;
 
@@ -182,6 +182,11 @@ int main()
 	}
 
 	realTime.Stop(cycleCount); // stop real-time loop
+
+	// reset the sim
+	vout[LVDT_OUT] = LVDT_MID_VRANGE;
+	vout[EDGE_OUT] = 0.0;
+	ni.WriteMultiAout(aoTask, vout, 2);
 
 	ni.StopTask(aiTask);
 	ni.StopTask(aoTask);
