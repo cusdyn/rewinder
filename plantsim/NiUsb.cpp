@@ -65,6 +65,29 @@ int NiUsb::StopTask(int taskNum)
 	return ret;
 }
 
+int NiUsb::AddDioChannel(int taskNum, Direction dir, int port, int pin)
+{
+	int ret = -1;
+	char line[36];
+
+	sprintf_s(line, "%s/port%d/line%d", devices.at(0).c_str(), port, pin);
+
+	if (dir == output)
+	{
+		if (ret = DAQmxCreateDOChan(task.at(taskNum), line, "", DAQmx_Val_ChanPerLine) < 0)
+		{
+			DAQmxGetExtendedErrorInfo(errBuff, 2048);
+			std::cout << "DAQmxCreateDOChan Error:" << errBuff;
+		}
+		else
+		{
+			numVout[taskNum]++;
+		}
+	}
+
+	return ret;
+}
+
 
 int NiUsb::AddVoltageChannel(int taskNum, Direction dir, int pin, float vmin, float vmax)
 {
@@ -120,6 +143,19 @@ int NiUsb::ReadAin(int taskNum, double* data)
 
 	return ret;
 }
+
+int NiUsb::WriteDout(int taskNum, unsigned int data)
+{
+	int ret = -1;
+
+	if (ret = DAQmxWriteDigitalScalarU32(task.at(taskNum), false, 0, data, NULL) < 0)
+	{
+
+	}
+
+	return ret;
+}
+
 
 int NiUsb::WriteMultiAout(int taskNum, double* data, int num) 
 {

@@ -35,17 +35,16 @@ private:
 	std::vector<float> lvdtOut;
 	std::vector<float> edgeOut;
 
-	//plant model coefficients
-	/*
-	double	b1 = 9.216250582849553e-4;
-	double  b0 = 8.479686771438059e-4;
-	double  a1 = -1.778800783071405;
-	double  a0 = 0.778800783071405;
-	*/
-	float  b1 = 9e-4;
-	float  b0 = 9e-4;
-	float  a1 = -1.8;
-	float  a0 = 0.8;
+	//plant model coefficients from rewinder_discrete.m
+	//float  b1 = 9.2163e-04;
+	//float  b0 = 8.4797e-04;
+	//float  a1 = -1.7788;
+	//float  a0 = 0.7788;
+	float  b1 = (float)2.3990e-04;
+	float  b0 = (float)2.3011e-04;
+	float  a1 = (float)-1.8825;
+	float  a0 = (float)0.8825;
+
 
 
 	float u[3];

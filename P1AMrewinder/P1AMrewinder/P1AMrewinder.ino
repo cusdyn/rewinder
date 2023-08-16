@@ -1,59 +1,13 @@
-/****************************************************************************************************************************
-  P1AMrewinder.ino
-  For SAMD boards
-  Mike Timmons ( derived from Written by Khoi Hoang as...)
-  
-  Built by Khoi Hoang https://github.com/khoih-prog/SAMD_TimerInterrupt
-  Licensed under MIT license
-  
-  Now even you use all these new 16 ISR-based timers,with their maximum interval practically unlimited (limited only by
-  unsigned long miliseconds), you just consume only one SAMD timer and avoid conflicting with other cores' tasks.
-  The accuracy is nearly perfect compared to software timers. The most important feature is they're ISR-based timers
-  Therefore, their executions are not blocked by bad-behaving functions / tasks.
-  This important feature is absolutely necessary for mission-critical tasks.
-*****************************************************************************************************************************/
 /*
-   Notes:
-   Special design is necessary to share data between interrupt code and the rest of your program.
-   Variables usually need to be "volatile" types. Volatile tells the compiler to avoid optimizations that assume
-   variable can not spontaneously change. Because your function may change variables while your program is using them,
-   the compiler needs this hint. But volatile alone is often not enough.
-   When accessing shared variables, usually interrupts must be disabled. Even with volatile,
-   if the interrupt changes a multi-byte variable between a sequence of instructions, it can be read incorrectly.
-   If your data is multiple variables, such as an array and a count, usually interrupts need to be disabled
-   or the entire sequence of your code which accesses the data.
+  River Valley Converting Rewinder web Wedge Control
+  Custom Dynamics, LLC
+  Mike Timmons
+  August 2023
+
 */
-
-#if !( defined(ARDUINO_SAMD_ZERO) || defined(ARDUINO_SAMD_MKR1000) || defined(ARDUINO_SAMD_MKRWIFI1010) \
-      || defined(ARDUINO_SAMD_NANO_33_IOT) || defined(ARDUINO_SAMD_MKRFox1200) || defined(ARDUINO_SAMD_MKRWAN1300) || defined(ARDUINO_SAMD_MKRWAN1310) \
-      || defined(ARDUINO_SAMD_MKRGSM1400) || defined(ARDUINO_SAMD_MKRNB1500) || defined(ARDUINO_SAMD_MKRVIDOR4000) \
-      || defined(ARDUINO_SAMD_CIRCUITPLAYGROUND_EXPRESS) || defined(__SAMD51__) || defined(__SAMD51J20A__) \
-      || defined(__SAMD51J19A__) || defined(__SAMD51G19A__) || defined(__SAMD51P19A__)  \
-      || defined(__SAMD21E15A__) || defined(__SAMD21E16A__) || defined(__SAMD21E17A__) || defined(__SAMD21E18A__) \
-      || defined(__SAMD21G15A__) || defined(__SAMD21G16A__) || defined(__SAMD21G17A__) || defined(__SAMD21G18A__) \
-      || defined(__SAMD21J15A__) || defined(__SAMD21J16A__) || defined(__SAMD21J17A__) || defined(__SAMD21J18A__) )
-  #error This code is designed to run on SAMD21/SAMD51 platform! Please check your Tools->Board setting.
-#endif
-
-/////////////////////////////////////////////////////////////////
-
-// These define's must be placed at the beginning before #include "SAMDTimerInterrupt.h"
-// _TIMERINTERRUPT_LOGLEVEL_ from 0 to 4
-// Don't define _TIMERINTERRUPT_LOGLEVEL_ > 0. Only for special ISR debugging only. Can hang the system.
-// Don't define TIMER_INTERRUPT_DEBUG > 2. Only for special ISR debugging only. Can hang the system.
-#define TIMER_INTERRUPT_DEBUG         0
-#define _TIMERINTERRUPT_LOGLEVEL_     0
 
 // Select only one to be true for SAMD21. Must must be placed at the beginning before #include "SAMDTimerInterrupt.h"
 #define USING_TIMER_TC3         true      // Only TC3 can be used for SAMD51
-#define USING_TIMER_TC4         false     // Not to use with Servo library
-#define USING_TIMER_TC5         false
-#define USING_TIMER_TCC         false
-#define USING_TIMER_TCC1        false
-#define USING_TIMER_TCC2        false     // Don't use this, can crash on some boards
-
-// Uncomment To test if conflict with Servo library
-//#include "Servo.h"
 
 /////////////////////////////////////////////////////////////////
 
@@ -61,10 +15,29 @@
 #include <P1AM.h>
 #include <P1_HSC.h>
 #include <LibPrintf.h>
+#include <SPI.h>
+#include <SD.h>
+#include <math.h>
+
+/* SLOT
+   _____  __1__ __2__ __3__
+	|  P  ||  P  |  P  |  P  |
+	|  1  ||  1  |  1  |  1  |
+	|  A  ||  0  |  0  |  0  |
+	|  M  ||  4  |  2  |  4  |
+	|  -  ||  A  |  H  |  D  |
+	|  1  ||  D  |  S  |  A  |
+	|  0  ||     |  C  |  L  |
+	|  0  ||     |     |  2  |   
+	 ¯¯¯¯¯  ¯¯¯¯¯ ¯¯¯¯¯ ¯¯¯¯¯
+*/
+
 
 #ifndef LED_BUILTIN
   #define LED_BUILTIN       13
 #endif
+
+#define SD_CHIP_SELECT 28
 
 #define P104AD_MODULE_NUM 1
 #define COUNT_RANGE 65535
@@ -82,35 +55,94 @@ unsigned int SWPin = 7;
 
 // TC3, TC4, TC5 max permissible TIMER_INTERVAL_MS is 1398.101 ms, larger will overflow, therefore not permitted
 // Use TCC, TCC1, TCC2 for longer TIMER_INTERVAL_MS
-#define SAMPLE_RATE              100
+#define SAMPLE_RATE              (100.0)
 #define TIMER_INTERVAL_MS        (1000/SAMPLE_RATE)
 
-volatile uint32_t preMillisTimer = 0;
+/* 
+Transport Phase lag given by  TL = -57.3*w*Td
 
-float freq=5.0;
-float amp=2000;
-float y = 0;
+specifify a maximum permissible TL=-30 degrees for a delay Td and arrive at a targetr crossover wc.
+
+Td = time delay from input roll tangent to Edge Guide sensor location.
+Td = L/Speed where L is path length from tangent exit to Edge Guide.
+Speed is Web speed measured from reflective sensor on input idler pulley.
+
+Speed = IdlerCircumference(C)/RotationPeriodMeasured(T)
+
+wc = (30/57.3)/Td =  (30/57.3)*Speed/L = (30/57.3)*(C/T)/L 
+
+For C = 0.75 meter idler circumference and
+    L = 1.5 meter path length
+
+    (30/57.3)*(C/T)/L = (30/57.3)*(0.75/T)/1.5 = 0.2618   = WC_DES_FACTOR
+
+    so...
+
+    wc = WC_DES_FACTOR/T    where again T is the idler rotation period.
+
+*/
+#define WC_DES_FACTOR            (0.2618) 
+
+// Control loop Timer configuration
+volatile uint32_t preMillisTimer = 0;
 int   ticks=0;
 
+// Sensor sample inputs
 float lvdtVin[2];
-float ddtLvdt = 0;
 float edgeVin = 0.0;
 
-float Kpe = .0254; 
-float perr=0.0;
-float serr=0.0;
-float u=0.0;
-float ui=0.0;
-float cmd=0.0;
+// numerical differentiation of LVDT
+float ddtLvdt = 0;
 
-// gain scaling for web speed
-float Kpmax = 7;
-float wcmax = 2;
-float wcdes = wcmax;  // initialize desired wc and don't set it until speed is non-zero
-float tdelay = 0;
-float bz = 0.0842;   // zero location
-float Kp=0;
+
+/*
+    Compensator zero is set for a desired phase hump of 85 degrees.
+    This is unconventional, but it's to permit 30 degrees pahse loss due to transport lag,
+    or a design phase margin of 50 degrees intended.
+
+    % Ignoring transport lag consider you're designing for a phase margin of 
+    % 85 degrees.
+    dpm = 85*pi/180; % desired phase bump
+    
+    % resultant alpha
+    alpha = (1/sin(dpm) - 1)/(1 + 1/sin(dpm))
+    Kt = 1;  % tach feedback gain
+
+    % compensator zero
+    b = alpha*(a+Kt*Kv);
+
+    bz = b 
+*/
+// Control parameters  ... see outerpi.m
+float Kpe   = .0254;   // Kl/Keg = (80 V/meter)/(3149.6 V/M) scales edge guide to LVDT 
+float bz    = 0.0858;   // zero location
+float Kpmax = 23;    // max proportional gain regardless of web speed
+float wcmax = 10;     // open-loop crossover for Kpmax
+
+// variable gains
+float wcdes = wcmax/20;  // initialize desired wc for low gain and don't set it until speed is non-zero
+float tdelay = 0;        // no estimate for web speed until idler period measured
+float Kp=0;              // loop will calculate gains
 float Ki=0;
+
+// control variables
+float perr=0.0;      // position error: outer loop
+float serr=0.0;      // speed error: inner loop reference
+float u=0.0;         // proportional action
+float ui=0.0;        // inegral control action
+float cmd=0.0;       // command output to solenoid valve amplifier
+
+
+// Speed circuit
+// Create HSC class object for slot 2. 
+// It also automatically creates 2 P1_HSC_CHANNEL objects for this slot
+P1_HSC_Module HSC(2); 
+
+bool  printCounts = false;
+int   lastCounts   = 0;
+int   counts       = 0;
+int   speed_ticks  = 0;
+float period=0;
 
 /* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
  *  Channel 1=0-10V
@@ -119,6 +151,7 @@ float Ki=0;
  *  Channel 4=+-10V
  */
 const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00, 0x23, 0x00 };
+
 
 ///////////////////////////////////////////////
 
@@ -153,20 +186,20 @@ const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 
 // Init selected SAMD timer
 SAMDTimer ITimer(SELECTED_TIMER);
 
-///////////float y = 0;
 void TimerHandler()
 {
   static bool toggle = false;
-  // Read
+
+  // Sensor input
   lvdtVin[1] = LVDT_VOLTS(P1.readAnalog(1,LVDT_VIN_CHANNEL));
   edgeVin    = EDGE_VOLTS(P1.readAnalog(1,EDGE_VIN_CHANNEL));
 
-  // LVDT rate
+  // LVDT rate: numerical differentiation
   ddtLvdt = DLVDT(lvdtVin[0],lvdtVin[1]);
   lvdtVin[0] = lvdtVin[1];  // propagate LVDT state
 
+  // position error from edge guide in LVDT space
   perr = -edgeVin*Kpe;   // map edge guide voltage to LVDT equivalent
-
 
 	// P term
 	u = Kp*perr;
@@ -194,23 +227,34 @@ void TimerHandler()
 
   ticks++;
 
-#if (TIMER_INTERRUPT_DEBUG > 0)
-    static uint32_t curMillis = 0;
-      
-    curMillis = millis();
-    
-    if (curMillis > TIMER_INTERVAL_MS)
-    {
-      Serial.print("ITimer: millis() = "); Serial.print(curMillis);
-      Serial.print(", delta = "); Serial.println(curMillis - preMillisTimer);
-    }
-    
-    preMillisTimer = curMillis;
-#endif
 
-  //timer interrupt toggles LED_BUILTIN
-  digitalWrite(PIN_A1,toggle);
-  toggle = !toggle;
+  //timer interrupt pin toggle
+  //digitalWrite(PIN_A1,toggle);
+  //toggle = !toggle;
+
+  // read input side web idler pulse counter
+  counts = HSC.CNT1.readPosition();
+  
+  speed_ticks++; // increment period counter
+  
+  if( counts == (lastCounts+1))
+  {
+    // completed a rotation
+    lastCounts = counts;
+    printCounts = true;
+
+    period = float(speed_ticks)/SAMPLE_RATE;
+
+
+    wcdes = WC_DES_FACTOR/period;
+    speed_ticks=0;  
+  }
+  else if (counts > (lastCounts+1))
+  {
+    // extra ticks so reset
+    speed_ticks=0;
+    lastCounts = counts;
+  }
 }
 
 void setup()
@@ -229,6 +273,16 @@ void setup()
   Serial.begin(115200);
   while (!Serial && millis() < 5000);
   
+  // Initialize SD card
+  Serial.print("Initializing SD card...");
+  // see if the card is present and can be initialized:
+  if (!SD.begin(SD_CHIP_SELECT)) {
+    Serial.println("Card failed, or not present");
+    // don't do anything more:
+    while (1);
+  }
+  Serial.println("card initialized.");
+
   delay(100);
 
   Serial.print(F("\nStarting TimerInterruptTest on ")); Serial.println(BOARD_NAME);
@@ -250,8 +304,25 @@ void setup()
 	Kp = Kpmax;  	
 	Ki = bz*Kp;  // Kp / Ti;
 
+  // intialize web speed pulse counter
+  HSC.CNT1.isRotary = false;
+  HSC.CNT1.enableZReset = false;
+  HSC.CNT1.inhibitOn = false; //oneZ, threeIn, twoZ, fourIn
+  HSC.CNT1.mode = stepDirection;  //quad4x, quad1x
+  HSC.CNT1.polarity = positiveDirection;  //negativeDirection
 
+  HSC.configureChannels();  //Load settings into HSC module. Leave argument empty to use default CNT1 and CNT2 
+
+  HSC.CNT1.setPosition(1000); //Initialise positions
+
+
+  // don't know if this is needed
+  delay(100);
 }
+
+unsigned int loopTick=0;
+#define LOG_BUFF_LEN 50
+char logBuffer[LOG_BUFF_LEN];
 
 void loop()
 {
@@ -259,6 +330,7 @@ void loop()
   static bool timerStopped         = false;
   static bool ledToggle            = true;
   char rx_byte = 0;
+  
 
   if (Serial.available() > 0) {    // is a character available?
     rx_byte = Serial.read();       // get the character
@@ -268,12 +340,56 @@ void loop()
 
   digitalWrite(LED_BUILTIN, ledToggle);
 
-  Serial.print(F("Vlvdt:")); Serial.println(lvdtVin[1]);
-  Serial.print(F("dVlvdt:")); Serial.println(ddtLvdt);
-  Serial.print(F("Vedge:")); Serial.println(edgeVin);
-  Serial.print(F("cmd:")); Serial.println(cmd);
+  //Serial.print(F("Vlvdt:")); Serial.println(lvdtVin[1]);
+  //Serial.print(F("dVlvdt:")); Serial.println(ddtLvdt);
+  //Serial.print(F("Vedge:")); Serial.println(edgeVin);
+  //Serial.print(F("cmd:")); Serial.println(cmd);
   
+
+
+  
+
+  if( printCounts )
+  {
+    Serial.print("Counts : ");
+    Serial.print(counts);
+    Serial.print("Period : ");
+    Serial.print(period);
+    Serial.print("Wcdes: ");
+    Serial.print(wcdes);
+    Serial.println();   //print a blank line to look more organized
+
+    printCounts=false;
+  }
+
+
   ledToggle = !ledToggle;
+
+
+  //SCALE GAINS Kp = Kpmax * 10 ^ (log10(wc / wmax))
+	Kp = min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
+
+  memset(logBuffer,0,LOG_BUFF_LEN);
+  sprintf(logBuffer, "%d,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f",loopTick, edgeVin, lvdtVin[1], period, wcdes, Kp );
+
+ 
+ // open the file. note that only one file can be open at a time,
+  // so you have to close this one before opening another.
+  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+  // if the file is available, write to it:
+  if (dataFile) {
+    dataFile.println(logBuffer);
+    dataFile.close();
+    // print to the serial port too:
+    Serial.println(logBuffer);
+  }
+  // if the file isn't open, pop up an error:
+  else {
+    Serial.println("error opening datalog.txt");
+  }
+
+  loopTick++;
+
   delay(1000);
 }
 

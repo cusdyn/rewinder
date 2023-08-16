@@ -82,6 +82,8 @@
 #define AIN1                1
 #define LVDT_OUT            0
 #define EDGE_OUT            1
+#define SPEED_PULSE_PORT    0
+#define SPEED_PULSE_PIN     0
 #define ERROR -1
 
 
@@ -93,22 +95,29 @@ int main()
 	NiUsb    ni;
 	RewinderPlantSim rwSim(RECORDLENGTH);
 
+	int SpeedPulsePeriod = SAMPLE_RATE;
 	int    aiTask = -1;
 	int    aoTask = -1;
+	int    doTask = -1;
 	int    cycleCount = 0;
 	double cmdin;
 	double vout[2];
 
+	unsigned int toggle = 1;
+
 	// inisialize the 
 	if((aiTask = ni.InitializeTask()) == ERROR) return 0;
 	if((aoTask = ni.InitializeTask()) == ERROR) return 0;
+	if ((doTask = ni.InitializeTask()) == ERROR) return 0;
 
 	if(ni.AddVoltageChannel(aiTask, input, CMD_AIN, 0.0, 10.0)) return 0;
 	if(ni.AddVoltageChannel(aoTask, output, LVDT_OUT, 0.0, 10.0))  return 0;
 	if(ni.AddVoltageChannel(aoTask, output, EDGE_OUT, -10, 10.0))  return 0;
+	if(ni.AddDioChannel(doTask, output, SPEED_PULSE_PORT, SPEED_PULSE_PIN))  return 0;
 
 	ni.StartTask(aiTask);
 	ni.StartTask(aoTask);
+	ni.StartTask(doTask);
 
 
 	realTime.Start();  // commence pseudo-real-time loop.
@@ -121,6 +130,12 @@ int main()
 
 	while (1)
 	{
+		ni.WriteDout(doTask, toggle);
+
+		if (cycleCount % SpeedPulsePeriod == 0)
+		{
+			toggle ^= 1;
+		}
 
 		if (_kbhit())
 		{
@@ -146,6 +161,15 @@ int main()
 				break;
 			case '4':
 				rwSim.SetPedge(0.05);   // m
+				break;
+			case 'f':
+				SpeedPulsePeriod = max(SpeedPulsePeriod-10, 10);
+				break;
+			case 'g':
+				SpeedPulsePeriod = max(SpeedPulsePeriod - 1, 1);
+				break;
+			case 's':
+				SpeedPulsePeriod +=10;
 				break;
 			default:
 				break;

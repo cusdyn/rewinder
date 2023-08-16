@@ -7,7 +7,7 @@ RewinderPlantSim::RewinderPlantSim(int loglen)
 	memset(u, 0, 3 * sizeof(double));
 	memset(y, 0, 3 * sizeof(double));
 
-	KlvdtToEg = KEG / KL;
+	KlvdtToEg = (float)(KEG / KL);
 
 	pEdge = 0;  // relative to mid range
 	vEdge = LVDT_MID_VRANGE;
@@ -24,13 +24,13 @@ void  RewinderPlantSim::SetPedge(float peg)
 	pEdge = peg;
 
 	// this edge guide center positon in LVDT volt equivalents
-	vEdge = KL * peg + VALVE_AMP_MIDRANGE;
+	vEdge = (float)(KL * peg + VALVE_AMP_MIDRANGE);
 }
 
 float RewinderPlantSim::CmdIn(float cmd)
 {
 	float yout = 0;
-	int      n = cmdIn.size();
+	int      n = (int)cmdIn.size();
 	
 	// Map Aplifier command voltage to directional voltage: signed
 #if 1
@@ -94,7 +94,7 @@ float RewinderPlantSim::CmdIn(float cmd)
 float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 {
 	float veg;                // desired output.
-	float satlim = KL * EGZ;  // LVDT equivalent range to saturation of edge guide.
+	float satlim = (float)(KL * EGZ);  // LVDT equivalent range to saturation of edge guide.
 #if 1
 	float dv = vlvdt-vEdge; // lvdt pos to edge-guide-equivalent center pos on lvdt
 	
@@ -116,8 +116,8 @@ float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 	// you will model a delay here, but for now apply the lvdt equivalent immdiately
 	
 	// clamp it
-	veg = max(-EDGE_GUIDE_VSAT, veg);
-	veg = min(EDGE_GUIDE_VSAT, veg);
+	veg = (float)max(-EDGE_GUIDE_VSAT, veg);
+	veg = (float)min(EDGE_GUIDE_VSAT, veg);
 
 	edgeOut.push_back(veg);
 
@@ -126,9 +126,9 @@ float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 
 void RewinderPlantSim::LogFilesOut(void)
 {
-	ToFile("cmd",  &cmdIn[0],   cmdIn.size());
-	ToFile("lvdt", &lvdtOut[0], cmdIn.size());
-	ToFile("edge", &edgeOut[0], cmdIn.size());
+	ToFile("cmd",  &cmdIn[0],   (int)cmdIn.size());
+	ToFile("lvdt", &lvdtOut[0], (int)cmdIn.size());
+	ToFile("edge", &edgeOut[0], (int)cmdIn.size());
 }
 
 int RewinderPlantSim::ToFile(const char* fname, float* data, int num)
@@ -139,7 +139,7 @@ int RewinderPlantSim::ToFile(const char* fname, float* data, int num)
 	char fileName[30] = "data.txt";
 	printf("\nType in a file name:\n");
 	if (fname == NULL) {
-		scanf_s("%s", fileName, sizeof(fileName));
+		scanf_s("%s", fileName, (unsigned int)sizeof(fileName));
 	}
 	else {
 		strcpy_s(fileName, fname);

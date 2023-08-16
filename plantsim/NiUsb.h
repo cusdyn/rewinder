@@ -23,8 +23,10 @@ public:
 	int StartTask(int taskNum);
 	int StopTask(int taskNum);
 	int AddVoltageChannel(int taskNum, Direction dir, int pin, float vmin, float vmax);
+	int AddDioChannel(int taskNum, Direction dir, int port, int pin);
 	int ReadAin(int taskNum, double* data);
 	int WriteMultiAout(int taskNum, double* data, int num);
+	int WriteDout(int taskNum, unsigned int data);
 
 private:
 	std::vector<std::string> devices;
