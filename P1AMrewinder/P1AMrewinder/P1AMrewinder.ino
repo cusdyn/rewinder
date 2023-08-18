@@ -32,6 +32,11 @@
 	 ¯¯¯¯¯  ¯¯¯¯¯ ¯¯¯¯¯ ¯¯¯¯¯
 */
 
+// TC3, TC4, TC5 max permissible TIMER_INTERVAL_MS is 1398.101 ms, larger will overflow, therefore not permitted
+// Use TCC, TCC1, TCC2 for longer TIMER_INTERVAL_MS
+#define SAMPLE_RATE              (100.0)
+#define TIMER_INTERVAL_MS        (1000/SAMPLE_RATE)
+
 
 #ifndef LED_BUILTIN
   #define LED_BUILTIN       13
@@ -42,21 +47,28 @@
 #define P104AD_MODULE_NUM 1
 #define COUNT_RANGE 65535
 
+#define DAC_SLOT  3
+#define DAC_CMD_OUT_CHANNEL  2
+#define DAC_POT_OUT_CHANNEL  1
+
+
 #define LVDT_VIN_CHANNEL 1
 #define EDGE_VIN_CHANNEL 2
+#define POT_VIN_CHANNEL  3
+
 #define CMD_MAX  5.0
 #define CMD_MIDRANGE 5.0
 
-#define LVDT_VOLTS(x)  (10.0*x/COUNT_RANGE)
-#define EDGE_VOLTS(x)  (20.0*x/COUNT_RANGE)
-#define CMD_COUNTS(x)   (x*4095/10.0)
-#define DLVDT(x1,x2)     ((x2-x1)/(0.01))
-unsigned int SWPin = 7;
+#define LVDT_VRANGE    10
+#define EDGE_VRANGE    20
+#define CMD_VRANGE     10
 
-// TC3, TC4, TC5 max permissible TIMER_INTERVAL_MS is 1398.101 ms, larger will overflow, therefore not permitted
-// Use TCC, TCC1, TCC2 for longer TIMER_INTERVAL_MS
-#define SAMPLE_RATE              (100.0)
-#define TIMER_INTERVAL_MS        (1000/SAMPLE_RATE)
+#define LVDT_VOLTS(x)  (LVDT_VRANGE*x/COUNT_RANGE)
+#define EDGE_VOLTS(x)  (EDGE_VRANGE*x/COUNT_RANGE)
+#define CMD_COUNTS(x)   (x*4095/CMD_VRANGE)
+#define DLVDT(x1,x2)     ((x2-x1)*SAMPLE_RATE)
+
+
 
 /* 
 Transport Phase lag given by  TL = -57.3*w*Td
@@ -147,11 +159,10 @@ float period=0;
 /* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
  *  Channel 1=0-10V
  *  Channel 2=+-10V
- *  Channel 3=+-10V
+ *  Channel 3=0-10V
  *  Channel 4=+-10V
  */
-const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x22, 0x00, 0x00, 0x00, 0x23, 0x00 };
-
+const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x22, 0x01, 0x00, 0x00, 0x23, 0x03 };
 
 ///////////////////////////////////////////////
 
@@ -204,26 +215,29 @@ void TimerHandler()
 	// P term
 	u = Kp*perr;
 
-	// I term
+	// I term: integrator on outer loop handles Edge Guide saturation:
+  // it integrated back to linear output region around the null point.
 	ui = ui + (Ki*perr)/SAMPLE_RATE;
 
   // clamp integrator
   ui = max(ui, -CMD_MAX);
   ui = min(ui, CMD_MAX);
 
-  // speed error
+  // speed error: inner loop reference
 	serr = (u + ui) - ddtLvdt;
 
-	// unity gain on inner loop...consider tach feedback gain?
+	// unity gain on inner loop so command output to valve amp is just this...
 	cmd = serr;
 
-	cmd = max(cmd, -CMD_MAX);
-	cmd = min(cmd, CMD_MAX);
+  // clamp to +- maximum command
+  cmd = max(cmd, -CMD_MAX);
+	cmd = min(cmd, CMD_MAX);   
 
+  // offset for 0-10 V wandfluh valve amp input. the amp will map 5-0V one way and 5-10V the other.
 	cmd = cmd + CMD_MIDRANGE;
 
-//  y = amp + amp*sin(6.28*freq*ticks*0.005);
-  P1.writeAnalog(CMD_COUNTS(cmd), 3, 2); //writes analog data to P1 output module
+  
+  P1.writeAnalog(CMD_COUNTS(cmd), DAC_SLOT, DAC_CMD_OUT_CHANNEL); //writes analog data to P1 output module
 
   ticks++;
 
@@ -257,8 +271,16 @@ void TimerHandler()
   }
 }
 
+#define BC_STR_LEN 20
+#define NUM_BOOT_CYCLE_LOGS 10
+char logFileName[20];
+
 void setup()
 {
+  File bcFile;
+  char bcString[BC_STR_LEN];
+  int bcscnt=0;
+  
 
    while (!P1.init()){ 
     ; //Wait for Modules to Sign on   
@@ -315,6 +337,59 @@ void setup()
 
   HSC.CNT1.setPosition(1000); //Initialise positions
 
+  // BIAS the potentiometer dial
+  P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_POT_OUT_CHANNEL);
+
+  // log file management...
+  bcFile = SD.open("bc.txt");
+
+  // if the file opened okay, write to it:
+  if (bcFile) {
+    memset(bcString,0,BC_STR_LEN);
+ 
+    while(bcFile.available() && (bcscnt < BC_STR_LEN)) 
+    {
+      bcString[bcscnt++] = bcFile.read();
+    }
+    sscanf(bcString,"%d", &bcscnt);
+
+    Serial.print("entry boot count:"); Serial.print(bcscnt); Serial.println();
+    bcFile.close();
+
+    // remove the file    
+    SD.remove("bc.txt");
+
+    // remove an old log file
+    if( bcscnt > NUM_BOOT_CYCLE_LOGS )
+    {
+      sprintf(bcString, "%d.txt", bcscnt-NUM_BOOT_CYCLE_LOGS);
+      SD.remove(bcString);
+    }
+  }
+  else
+  {
+    Serial.println("Failed to open bc.txt");
+  }
+
+  Serial.println("Updating boot count");
+ 
+  bcscnt += 1;  // increment boot count;
+  sprintf(bcString,"%d",bcscnt);
+  sprintf(logFileName, "%d.txt", bcscnt);
+  
+  File bcOutFile = SD.open("bc.txt", FILE_WRITE);
+
+  // if the file opened okay, write to it:
+  if (bcOutFile) {
+   Serial.print("exit boot count:"); Serial.println(bcString);
+    bcOutFile.println(bcString);
+    // close the file:
+    bcOutFile.close();
+  }
+  else
+  {
+    Serial.println("Failed to open bc.txt");
+  }
 
   // don't know if this is needed
   delay(100);
@@ -323,14 +398,13 @@ void setup()
 unsigned int loopTick=0;
 #define LOG_BUFF_LEN 50
 char logBuffer[LOG_BUFF_LEN];
-
 void loop()
 {
   static unsigned long lastTimer   = 0; 
   static bool timerStopped         = false;
   static bool ledToggle            = true;
   char rx_byte = 0;
-  
+  float potScale;
 
   if (Serial.available() > 0) {    // is a character available?
     rx_byte = Serial.read();       // get the character
@@ -365,17 +439,40 @@ void loop()
 
   ledToggle = !ledToggle;
 
+  // Gain scale pot wiper nominal is 50% full scale = 1 multiplier.
+  // 5-0V scales down 1 to zero. 5-10V scales multiplier  1 to 2
+  potScale    = 2.0*P1.readAnalog(1,POT_VIN_CHANNEL)/(float)(COUNT_RANGE);
 
-  //SCALE GAINS Kp = Kpmax * 10 ^ (log10(wc / wmax))
-	Kp = min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
+  /* SCALE GAIN Kp = Kpmax * 10 ^ (log10(wc / wmax))
+
+    measured web speed gives estimate for delay time.
+    From the web speed measurement we scaled our desired crossover
+    to estimate taking 30 degrees of pahse margin from our generous
+    phase hump offered by our compensator zero.
+
+    Recall above we designed for 85 degrees of phase gain, and we
+    selected wc where the web speed time delay takes 30 degrees for 
+    a design phase margin target of 50 degrees.
+
+    the plant model presumes a -20db/decade slope over the range of target
+    bandwidth's scaled based on web speed.
+
+    Therefore we slide KP on this -20Db slope line to set target crossover
+    relative to design crossover wcmax set by design gain Kpmax.
+
+  */
+
+	Kp = potScale*min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
 
   memset(logBuffer,0,LOG_BUFF_LEN);
-  sprintf(logBuffer, "%d,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f",loopTick, edgeVin, lvdtVin[1], period, wcdes, Kp );
+  sprintf(logBuffer, 
+          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f",
+           loopTick, edgeVin, lvdtVin[1], period, wcdes, Kp, potScale );
 
  
  // open the file. note that only one file can be open at a time,
   // so you have to close this one before opening another.
-  File dataFile = SD.open("datalog.txt", FILE_WRITE);
+  File dataFile = SD.open(logFileName, FILE_WRITE);
   // if the file is available, write to it:
   if (dataFile) {
     dataFile.println(logBuffer);
