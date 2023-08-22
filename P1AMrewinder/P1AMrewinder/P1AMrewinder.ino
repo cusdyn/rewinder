@@ -50,6 +50,8 @@
 #define DAC_SLOT  3
 #define DAC_CMD_OUT_CHANNEL  2
 #define DAC_POT_OUT_CHANNEL  1
+#define DAC_ACTIVE_OUT_CHAN  3
+#define DAC_INACTIVE_OUT_CHAN  4
 
 
 #define LVDT_VIN_CHANNEL 1
@@ -63,9 +65,9 @@
 #define EDGE_VRANGE    20
 #define CMD_VRANGE     10
 
-#define LVDT_VOLTS(x)  (LVDT_VRANGE*x/COUNT_RANGE)
-#define EDGE_VOLTS(x)  (EDGE_VRANGE*x/COUNT_RANGE)
-#define CMD_COUNTS(x)   (x*4095/CMD_VRANGE)
+#define LVDT_VOLTS(x)  ((float)LVDT_VRANGE*x/(float)COUNT_RANGE)
+#define EDGE_VOLTS(x)  ((float)EDGE_VRANGE*x/(float)COUNT_RANGE)
+#define CMD_COUNTS(x)   (x*4095.0/(float)CMD_VRANGE)
 #define DLVDT(x1,x2)     ((x2-x1)*SAMPLE_RATE)
 
 
@@ -94,6 +96,11 @@ For C = 0.75 meter idler circumference and
 
 */
 #define WC_DES_FACTOR            (0.2618) 
+#define MAX_IDLER_DRUM_PERIOD    (3.0)
+
+// private functions
+static void LogToFile(bool print, int counter);
+static void sd_init(void);
 
 // Control loop Timer configuration
 volatile uint32_t preMillisTimer = 0;
@@ -128,11 +135,13 @@ float ddtLvdt = 0;
 // Control parameters  ... see outerpi.m
 float Kpe   = .0254;   // Kl/Keg = (80 V/meter)/(3149.6 V/M) scales edge guide to LVDT 
 float bz    = 0.0858;   // zero location
-float Kpmax = 23;    // max proportional gain regardless of web speed
-float wcmax = 10;     // open-loop crossover for Kpmax
+float Kpmax = 23;    // max proportional gain regardless of web speed    7
+float wcmax = 10;     // open-loop crossover for Kpmax   2
 
 // variable gains
-float wcdes = wcmax/20;  // initialize desired wc for low gain and don't set it until speed is non-zero
+float wcdes;  
+
+
 float tdelay = 0;        // no estimate for web speed until idler period measured
 float Kp=0;              // loop will calculate gains
 float Ki=0;
@@ -154,7 +163,7 @@ bool  printCounts = false;
 int   lastCounts   = 0;
 int   counts       = 0;
 int   speed_ticks  = 0;
-float period=0;
+float period=MAX_IDLER_DRUM_PERIOD;   // intialize slow
 
 /* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
  *  Channel 1=0-10V
@@ -196,6 +205,17 @@ const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 
 
 // Init selected SAMD timer
 SAMDTimer ITimer(SELECTED_TIMER);
+
+unsigned int loopTick=0;
+float potScale;
+#define LOG_BUFF_LEN 50
+char logBuffer[LOG_BUFF_LEN];
+
+static unsigned long lastTimer   = 0; 
+static bool timerStopped         = false;
+static bool ledToggle            = true;
+
+
 
 void TimerHandler()
 {
@@ -243,8 +263,8 @@ void TimerHandler()
 
 
   //timer interrupt pin toggle
-  //digitalWrite(PIN_A1,toggle);
-  //toggle = !toggle;
+  digitalWrite(PIN_A1,toggle);
+  toggle = !toggle;
 
   // read input side web idler pulse counter
   counts = HSC.CNT1.readPosition();
@@ -255,10 +275,9 @@ void TimerHandler()
   {
     // completed a rotation
     lastCounts = counts;
-    printCounts = true;
+    //printCounts = true;
 
     period = float(speed_ticks)/SAMPLE_RATE;
-
 
     wcdes = WC_DES_FACTOR/period;
     speed_ticks=0;  
@@ -269,11 +288,50 @@ void TimerHandler()
     speed_ticks=0;
     lastCounts = counts;
   }
+
+
+  // Gain scale pot wiper nominal is 50% full scale = 1 multiplier.
+  // 5-0V scales down 1 to zero. 5-10V scales multiplier  1 to 2
+  potScale    = 2.0*P1.readAnalog(1,POT_VIN_CHANNEL)/(float)(COUNT_RANGE);
+
+  /* SCALE GAIN Kp = Kpmax * 10 ^ (log10(wc / wmax))
+
+    measured web speed gives estimate for delay time.
+    From the web speed measurement we scaled our desired crossover
+    to estimate taking 30 degrees of pahse margin from our generous
+    phase hump offered by our compensator zero.
+
+    Recall above we designed for 85 degrees of phase gain, and we
+    selected wc where the web speed time delay takes 30 degrees for 
+    a design phase margin target of 50 degrees.
+
+    the plant model presumes a -20db/decade slope over the range of target
+    bandwidth's scaled based on web speed.
+
+    Therefore we slide KP on this -20Db slope line to set target crossover
+    relative to design crossover wcmax set by design gain Kpmax.
+
+  */
+
+  if(period < MAX_IDLER_DRUM_PERIOD)
+  {
+	  Kp = potScale*min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
+    P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);   // green panel LED on
+    P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red off
+  }
+  else
+  {
+    Kp = 0;
+    P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);     // green off
+    P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red panel LED ON
+  }
+
 }
 
 #define BC_STR_LEN 20
 #define NUM_BOOT_CYCLE_LOGS 10
-char logFileName[20];
+#define FILENAME_LEN 20
+char logFileName[FILENAME_LEN];
 
 void setup()
 {
@@ -295,31 +353,11 @@ void setup()
   Serial.begin(115200);
   while (!Serial && millis() < 5000);
   
-  // Initialize SD card
-  Serial.print("Initializing SD card...");
-  // see if the card is present and can be initialized:
-  if (!SD.begin(SD_CHIP_SELECT)) {
-    Serial.println("Card failed, or not present");
-    // don't do anything more:
-    while (1);
-  }
-  Serial.println("card initialized.");
+  sd_init();
 
   delay(100);
 
-  Serial.print(F("\nStarting TimerInterruptTest on ")); Serial.println(BOARD_NAME);
-  Serial.println(SAMD_TIMER_INTERRUPT_VERSION);
-  Serial.print(F("CPU Frequency = ")); Serial.print(F_CPU / 1000000); Serial.println(F(" MHz"));
-
-  // Interval in millisecs
-  if (ITimer.attachInterruptInterval_MS(TIMER_INTERVAL_MS, TimerHandler))
-  {
-    preMillisTimer = millis();
-    Serial.print(F("Starting ITimer OK, millis() = ")); Serial.println(preMillisTimer);
-  }
-  else
-    Serial.println(F("Can't set ITimer. Select another freq. or timer"));
-
+  
   // Initialize controller
   lvdtVin[0] = LVDT_VOLTS(P1.readAnalog(1,LVDT_VIN_CHANNEL));
 
@@ -332,6 +370,7 @@ void setup()
   HSC.CNT1.inhibitOn = false; //oneZ, threeIn, twoZ, fourIn
   HSC.CNT1.mode = stepDirection;  //quad4x, quad1x
   HSC.CNT1.polarity = positiveDirection;  //negativeDirection
+
 
   HSC.configureChannels();  //Load settings into HSC module. Leave argument empty to use default CNT1 and CNT2 
 
@@ -375,6 +414,7 @@ void setup()
  
   bcscnt += 1;  // increment boot count;
   sprintf(bcString,"%d",bcscnt);
+  memset(logFileName,0,FILENAME_LEN);
   sprintf(logFileName, "%d.txt", bcscnt);
   
   File bcOutFile = SD.open("bc.txt", FILE_WRITE);
@@ -391,37 +431,31 @@ void setup()
     Serial.println("Failed to open bc.txt");
   }
 
+
+  Serial.print(F("\nStarting TimerInterruptTest on ")); Serial.println(BOARD_NAME);
+  Serial.println(SAMD_TIMER_INTERRUPT_VERSION);
+  Serial.print(F("CPU Frequency = ")); Serial.print(F_CPU / 1000000); Serial.println(F(" MHz"));
+
+  // Interval in millisecs
+  if (ITimer.attachInterruptInterval_MS(TIMER_INTERVAL_MS, TimerHandler))
+  {
+    preMillisTimer = millis();
+    Serial.print(F("Starting ITimer OK, millis() = ")); Serial.println(preMillisTimer);
+  }
+  else
+    Serial.println(F("Can't set ITimer. Select another freq. or timer"));
+
+
   // don't know if this is needed
   delay(100);
 }
 
-unsigned int loopTick=0;
-#define LOG_BUFF_LEN 50
-char logBuffer[LOG_BUFF_LEN];
+
 void loop()
 {
-  static unsigned long lastTimer   = 0; 
-  static bool timerStopped         = false;
-  static bool ledToggle            = true;
-  char rx_byte = 0;
-  float potScale;
-
-  if (Serial.available() > 0) {    // is a character available?
-    rx_byte = Serial.read();       // get the character
-    
-    Serial.print("rx_byte:"); Serial.println(rx_byte);
-  } 
 
   digitalWrite(LED_BUILTIN, ledToggle);
-
-  //Serial.print(F("Vlvdt:")); Serial.println(lvdtVin[1]);
-  //Serial.print(F("dVlvdt:")); Serial.println(ddtLvdt);
-  //Serial.print(F("Vedge:")); Serial.println(edgeVin);
-  //Serial.print(F("cmd:")); Serial.println(cmd);
-  
-
-
-  
+  ledToggle = !ledToggle;
 
   if( printCounts )
   {
@@ -437,61 +471,73 @@ void loop()
   }
 
 
-  ledToggle = !ledToggle;
+  
+  LogToFile(true, ticks);
 
-  // Gain scale pot wiper nominal is 50% full scale = 1 multiplier.
-  // 5-0V scales down 1 to zero. 5-10V scales multiplier  1 to 2
-  potScale    = 2.0*P1.readAnalog(1,POT_VIN_CHANNEL)/(float)(COUNT_RANGE);
-
-  /* SCALE GAIN Kp = Kpmax * 10 ^ (log10(wc / wmax))
-
-    measured web speed gives estimate for delay time.
-    From the web speed measurement we scaled our desired crossover
-    to estimate taking 30 degrees of pahse margin from our generous
-    phase hump offered by our compensator zero.
-
-    Recall above we designed for 85 degrees of phase gain, and we
-    selected wc where the web speed time delay takes 30 degrees for 
-    a design phase margin target of 50 degrees.
-
-    the plant model presumes a -20db/decade slope over the range of target
-    bandwidth's scaled based on web speed.
-
-    Therefore we slide KP on this -20Db slope line to set target crossover
-    relative to design crossover wcmax set by design gain Kpmax.
-
-  */
-
-	Kp = potScale*min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
-
-  memset(logBuffer,0,LOG_BUFF_LEN);
-  sprintf(logBuffer, 
-          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f",
-           loopTick, edgeVin, lvdtVin[1], period, wcdes, Kp, potScale );
-
- 
- // open the file. note that only one file can be open at a time,
-  // so you have to close this one before opening another.
-  File dataFile = SD.open(logFileName, FILE_WRITE);
-  // if the file is available, write to it:
-  if (dataFile) {
-    dataFile.println(logBuffer);
-    dataFile.close();
-    // print to the serial port too:
-    Serial.println(logBuffer);
-  }
-  // if the file isn't open, pop up an error:
-  else {
-    Serial.println("error opening datalog.txt");
-  }
 
   loopTick++;
+  
 
   delay(1000);
 }
+
 
 void gpio_config(void)
 {
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_A1, OUTPUT);
+}
+
+
+
+static void LogToFile(bool print, int counter)
+{
+  memset(logBuffer,0,LOG_BUFF_LEN);
+  sprintf(logBuffer, 
+          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d",
+           counter, edgeVin, lvdtVin[1], period, wcdes, Kp, potScale, counts );
+
+ 
+  // open the file. note that only one file can be open at a time,
+  // so you have to close this one before opening another.
+  File dataFile = SD.open(logFileName, FILE_WRITE);
+  // if the file is available, write to it:
+  
+  if (dataFile) {
+    dataFile.println(logBuffer);
+    dataFile.close();
+
+    if(print){
+      Serial.println(logBuffer);
+    }
+  }
+  // if the file isn't open, pop up an error:
+  else {
+    if(print){
+      Serial.println("error opening datalog.txt");
+    }
+
+    // try to initialize the SD card again...
+    sd_init();
+  }
+
+}
+
+
+
+/*
+  Initialize SD card
+*/
+static void sd_init(void)
+{
+// Initialize SD counter
+  Serial.print("Initializing SD card...");
+  // see if the card is present and can be initialized:
+  if (SD.begin(SD_CHIP_SELECT)) {
+    Serial.println("card initialized.");
+  }
+  else
+  {
+    Serial.println("Card failed, or not present");
+  }
 }
