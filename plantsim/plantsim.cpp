@@ -75,7 +75,7 @@
 %       N-sample impulse
 */
 
-#define SAMPLE_RATE         200
+#define SAMPLE_RATE         400
 #define DURATION			60  // seconds
 #define RECORDLENGTH		(SAMPLE_RATE*DURATION)
 #define CMD_AIN             0
@@ -89,13 +89,15 @@
 
 #define IMPULSE_TEST 0
 
+#define MAX_IDLER_PERIOD_SECONDS  4
+#define SPEED_PULSE_MAX_PERIOD   (SAMPLE_RATE*MAX_IDLER_PERIOD_SECONDS/2.0)
 int main()
 {
 	RealTime realTime(SAMPLE_RATE);
 	NiUsb    ni;
 	RewinderPlantSim rwSim(RECORDLENGTH);
 
-	int SpeedPulsePeriod = SAMPLE_RATE;
+	int SpeedPulsePeriod = SPEED_PULSE_MAX_PERIOD;
 	int    aiTask = -1;
 	int    aoTask = -1;
 	int    doTask = -1;
@@ -164,12 +166,15 @@ int main()
 				break;
 			case 'f':
 				SpeedPulsePeriod = max(SpeedPulsePeriod-10, 10);
+				std::cout << "speedPulsePeriod:" << 2*SpeedPulsePeriod/(float)SAMPLE_RATE << std::endl;
 				break;
 			case 'g':
 				SpeedPulsePeriod = max(SpeedPulsePeriod - 1, 1);
+				std::cout << "speedPulsePeriod:" << 2 * SpeedPulsePeriod / (float)SAMPLE_RATE << std::endl;
 				break;
 			case 's':
 				SpeedPulsePeriod +=10;
+				std::cout << "speedPulsePeriod:" << 2 * SpeedPulsePeriod / (float)SAMPLE_RATE << std::endl;
 				break;
 			default:
 				break;
@@ -192,11 +197,11 @@ int main()
 		// Add it to the mid-range
 		vout[LVDT_OUT] += LVDT_MID_VRANGE;
 
+		vout[LVDT_OUT] = min(vout[LVDT_OUT], MAX_LVDT_VOLTAGE);
+		vout[LVDT_OUT] = max(vout[LVDT_OUT], MIN_LVDT_VOLTAGE);
+
 		vout[EDGE_OUT] = rwSim.EdgeGuideModel(vout[LVDT_OUT]);
 
-		
-//		vout[LVDT_OUT] = 2.0;
-//		vout[EDGE_OUT] = -1.0;
 
 		// output LVDT and EdgeGuide Sensor Voltages
 		ni.WriteMultiAout(aoTask, vout, 2);

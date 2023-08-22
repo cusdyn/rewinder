@@ -16,7 +16,7 @@ xlim([0.1 100]);
 
 % zero-order hold equivalent
 
-h = 0.005;  % 10ms sampling time
+h = 0.00125;  % 10ms sampling time
 
 H = tf(numc,denc);
 G = c2d(H,h,'zoh');
@@ -32,7 +32,7 @@ figure('Name',"Plant Model Frequency Response");
 dbode(numd,dend,h);
 
 % discrete impulse response
-u = zeros(1,100);
+u = zeros(1,1000);
 y=u;
 u(1) = 1;
 

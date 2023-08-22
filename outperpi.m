@@ -1,6 +1,7 @@
 % another view of the edge guide plant
 clear
 close all
+
 Kv = 20; % Experimentally determined plant gain
 a=25;    % Experimentally determined plant bandwidth (rad/sec)
 
@@ -57,7 +58,7 @@ Kpmax = 1/M(find(W==wmax));
 % For a given transport lag time we accept the delay will take
 % "maxlag" of phase margin. We determine a new crossover frequency
 % where the Time delay results in this degree of phase loss.
-Td=3;
+Td=6;
 
 if( Td > 0)
     maxlag=30;  % maximum transport lag (degrees)
@@ -132,19 +133,31 @@ maxphiloc=find(P==max(P))
 
 cog=M(maxphiloc)
 
-Kpnext=Kp/cog
+Kpnext=Kp/cog;
 
-tstop = 40
-set_param('simrewinder_scaled','AlgebraicLoopSolver','Auto')
-sim('simrewinder_scaled', tstop);
+
+
+% discrete plant model of NI USB simulator
+nump = Kv;
+denp = [1 a];
+h = 0.005;  % 10ms sampling time
+H = tf(nump,denp);
+G = c2d(H,h,'zoh');
+[numd,dend,ts]=tfdata(G)
+
+tstop = 100
+set_param('simrewinder_scaled_dig','AlgebraicLoopSolver','Auto')
+sim('simrewinder_scaled_dig', tstop);
 
 % get simulink output
 s_lvdt  = get(logsout,'lvdt');
+s_edge  = get(logsout,'edge');
 s_vd    = get(logsout,'vdot');
 s_u     = get(logsout,'u');
 
 tm    = s_lvdt.Values.Time;
 lvdt  = s_lvdt.Values.Data;
+edge  = s_edge.Values.Data;
 vdot  = s_vd.Values.Data;
 u     = s_u.Values.Data;
 
@@ -164,4 +177,15 @@ ylabel('V/s')
 subplot(3,3,3)
 plot(tm,u,'r');
 title('Valve cmd');
+ylabel('V')
+
+subplot(3,3,4)
+plot(tm,edge,'b');
+title('Edge Error');
+ylabel('V')
+
+fig = figure('Name','Edge Error');
+plot(tm,edge*Keg/Kl,'b');
+%ylim([-0.05 0])
+title('Edge Error');
 ylabel('V')

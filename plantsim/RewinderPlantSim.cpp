@@ -11,6 +11,7 @@ RewinderPlantSim::RewinderPlantSim(int loglen)
 
 	pEdge = 0;  // relative to mid range
 	vEdge = LVDT_MID_VRANGE;
+	vEdge = LVDT_MID_VRANGE;
 }
 
 RewinderPlantSim::~RewinderPlantSim()
@@ -27,13 +28,17 @@ void  RewinderPlantSim::SetPedge(float peg)
 	vEdge = (float)(KL * peg + VALVE_AMP_MIDRANGE);
 }
 
+
+/*
+	Valve Amplifier command in to LVDTY voltage out
+
+*/
 float RewinderPlantSim::CmdIn(float cmd)
 {
 	float yout = 0;
 	int      n = (int)cmdIn.size();
 	
 	// Map Aplifier command voltage to directional voltage: signed
-#if 1
 	cmd -= VALVE_AMP_MIDRANGE;
 
 	u[2] = cmd;
@@ -57,27 +62,6 @@ float RewinderPlantSim::CmdIn(float cmd)
 
 	u[0] = u[1];
 	u[1] = u[2];
-#else
-	if (n < YYTESTSZ)
-	{
-		uu[n] = cmd;
-		//Plant model : difference equation from u to y.
-		if (n > 1)
-		{
-			yy[n] = b1 * uu[n - 1] + b0 * uu[n - 2] - a1 * yy[n - 1] - a0 * yy[n - 2];
-		}
-		else if (n == 1)
-		{
-			yy[n] = b1 * uu[n - 1] - a1 * yy[n - 1];
-		}
-		else // k = 1
-		{
-			yy[n] = 0;
-		}
-
-		yout = yy[n];
-	}
-#endif
 
 	if (cmdIn.size() < maxlogLen)
 	{
@@ -95,7 +79,7 @@ float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 {
 	float veg;                // desired output.
 	float satlim = (float)(KL * EGZ);  // LVDT equivalent range to saturation of edge guide.
-#if 1
+
 	float dv = vlvdt-vEdge; // lvdt pos to edge-guide-equivalent center pos on lvdt
 	
 	if (dv > satlim) 
@@ -110,9 +94,7 @@ float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 	{
 		veg = KlvdtToEg * dv;
 	}
-#else
-	veg = KlvdtToEg * (vlvdt - LVDT_MID_VRANGE);
-#endif
+
 	// you will model a delay here, but for now apply the lvdt equivalent immdiately
 	
 	// clamp it
