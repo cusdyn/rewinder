@@ -7,7 +7,7 @@ a=25;    % Experimentally determined plant bandwidth (rad/sec)
 
 % start with unity gain and maximum crossover frequency
 % We'll compute gain at this crossover frequency
-wmax=3;
+wmax=10;
 
 Kl = 8/0.1;  % LVDT volts-per-meter
 
@@ -133,15 +133,17 @@ if Td>0,
     str = sprintf('Phase response: Notice how the Td range example reduce the red-dotted phase bump. "Td modelled" result for specified Td=%2.1f',Td);
     title(str)
 else
-    title('Td=0 design point')
-    fig = semilogx(W,PP,'r');
+    title('Td=0,')
+    fig = semilogx(W,PP,'r:',W,P,W,-57.3*W*td(1),W,-57.3*W*td(2),W,-57.3*W*td(3),W,-57.3*W*td(4),W,-57.3*W*td(5),W,-57.3*W*td(6));
     grid on
     xlim([0.001 1000]);
     ylim([-180 0])
     yticks([-180:10:0]);
-    legend('No delay phase model','Location','northwest')
+    legend('No delay phase model','Td Modelled','Transport lag for Tdelay=0.01s','0.1s','0.5s','1s','2s','3s','Location','northwest')
     ylabel('relative phase (degrees)');
     xlabel('Angular Frequency (rad/sec)');
+    str = sprintf('Phase response: Notice how the Td range example reduce the red-dotted phase bump. "Td modelled" result for specified Td=%2.1f',Td);
+    title(str)
 end
 
 H=feedback(G,1);

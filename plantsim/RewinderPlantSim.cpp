@@ -1,7 +1,7 @@
 #include "RewinderPlantSim.h"
+#include <iostream>
 
-
-RewinderPlantSim::RewinderPlantSim(int loglen)
+RewinderPlantSim::RewinderPlantSim(int loglen, int sampleRate)
 {
 	maxlogLen = loglen;
 	memset(u, 0, 3 * sizeof(double));
@@ -12,6 +12,8 @@ RewinderPlantSim::RewinderPlantSim(int loglen)
 	pEdge = 0;  // relative to mid range
 	vEdge = LVDT_MID_VRANGE;
 	vEdge = LVDT_MID_VRANGE;
+
+	rate = sampleRate;
 }
 
 RewinderPlantSim::~RewinderPlantSim()
@@ -75,11 +77,11 @@ float RewinderPlantSim::CmdIn(float cmd)
 	return yout;
 }
 
-float RewinderPlantSim::EdgeGuideModel(float vlvdt)
+float RewinderPlantSim::EdgeGuideModel(float vlvdt, float idlerPeriod)
 {
 	float veg;                // desired output.
 	float satlim = (float)(KL * EGZ);  // LVDT equivalent range to saturation of edge guide.
-
+	float vout = 0;
 	float dv = vlvdt-vEdge; // lvdt pos to edge-guide-equivalent center pos on lvdt
 	
 	if (dv > satlim) 
@@ -103,7 +105,24 @@ float RewinderPlantSim::EdgeGuideModel(float vlvdt)
 
 	edgeOut.push_back(veg);
 
-	return veg;
+	// Get the edge value at the Td delay time
+	float speed  = IDLER_CIRCUMFERENCE / (idlerPeriod/rate);
+	float tdelay = DELAY_PATH_LENGTH / speed;
+
+	int sample = (int)(tdelay * rate);
+	
+	//std::cout << "period:" << idlerPeriod/rate << "speed:" << speed << "td:" << tdelay << "sample:" << sample << std::endl;
+
+	if (sample < (int)edgeOut.size())
+	{
+		vout = edgeOut.at(edgeOut.size()-sample);
+	}
+	else
+	{
+		vout = edgeOut.at(edgeOut.size() - 1);
+	}
+
+	return vout;
 }
 
 void RewinderPlantSim::LogFilesOut(void)

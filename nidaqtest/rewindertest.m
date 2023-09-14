@@ -9,7 +9,7 @@ load  speederr.txt
 load  tdout.txt
 load cmdout.txt
 
-h=1/400;  % sampling interval (seconds)
+h=1;  % sampling interval (seconds)
 N=length(edge);
 
 t=0:h:h*(N-1);

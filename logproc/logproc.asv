@@ -1,0 +1,10 @@
+clear
+close all
+
+load '33.txt'
+A=X33;
+
+ticks = A(:,1)-A(1,1);
+h=0.01;   % 10ms sampling interval
+
+t=tisk

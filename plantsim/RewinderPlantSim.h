@@ -19,18 +19,22 @@
 #define LVDT_MID_VRANGE  (4.0)
 #define EDGE_MID_VRANGE  (0.0)
 
+#define IDLER_CIRCUMFERENCE   (0.75)   // meters
+#define DELAY_PATH_LENGTH     (1.5)    // meters
+
 class RewinderPlantSim
 {
 public:
-	RewinderPlantSim(int loglen);
+	RewinderPlantSim(int loglen, int sampleRate);
 	~RewinderPlantSim();
 	float CmdIn(float cmd);
-	float EdgeGuideModel(float vlvdt);
+	float EdgeGuideModel(float vlvdt, float idlerPeriod);
 	void  LogFilesOut(void);
 	void  SetPedge(float peg);
 private:
 	int ToFile(const char* fname, float* data, int num);
 	int maxlogLen;
+	int rate;
 	float KlvdtToEg;
 	float pEdge;
 	float vEdge;

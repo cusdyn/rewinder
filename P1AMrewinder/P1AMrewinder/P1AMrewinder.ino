@@ -135,8 +135,8 @@ float ddtLvdt = 0;
 // Control parameters  ... see outerpi.m
 float Kpe   = .0254;   // Kl/Keg = (80 V/meter)/(3149.6 V/M) scales edge guide to LVDT 
 float bz    = 0.0858;   // zero location
-float Kpmax = 23;    // max proportional gain regardless of web speed    7
-float wcmax = 10;     // open-loop crossover for Kpmax   2
+float Kpmax = 7;    // max proportional gain regardless of web speed 
+float wcmax = 3;     // open-loop crossover for Kpmax   11
 
 // variable gains
 float wcdes;  
@@ -164,6 +164,7 @@ int   lastCounts   = 0;
 int   counts       = 0;
 int   speed_ticks  = 0;
 float period=MAX_IDLER_DRUM_PERIOD;   // intialize slow
+bool  pulseAction=false;
 
 /* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
  *  Channel 1=0-10V
@@ -281,6 +282,8 @@ void TimerHandler()
 
     wcdes = WC_DES_FACTOR/period;
     speed_ticks=0;  
+
+    pulseAction=true;
   }
   else if (counts > (lastCounts+1))
   {
@@ -288,6 +291,20 @@ void TimerHandler()
     speed_ticks=0;
     lastCounts = counts;
   }
+
+  // latch low period in case no pulses coming through...
+  if(pulseAction = true)
+  {
+    if(float(speed_ticks)/SAMPLE_RATE > MAX_IDLER_DRUM_PERIOD)
+    {
+      // kill the gain
+      period = MAX_IDLER_DRUM_PERIOD;
+      pulseAction = false;
+    }
+    
+  }
+
+
 
 
   // Gain scale pot wiper nominal is 50% full scale = 1 multiplier.
@@ -313,18 +330,27 @@ void TimerHandler()
 
   */
 
+ #if 1 
   if(period < MAX_IDLER_DRUM_PERIOD)
   {
 	  Kp = potScale*min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
+   	Ki = bz*Kp;  // Kp / Ti;
+
     P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);   // green panel LED on
     P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red off
   }
   else
   {
     Kp = 0;
+    Ki = 0;
     P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);     // green off
     P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red panel LED ON
   }
+#else
+  // test no gain scaling for speed.
+  Kp = potScale*Kpmax;
+  Ki = bz*Kp;  // Kp / Ti;
+#endif
 
 }
 
@@ -345,8 +371,13 @@ void setup()
     //GCLK->GENCTRL
   }
 
+  // set valve command to midrange (noflow)
+  P1.writeAnalog(CMD_COUNTS(CMD_MIDRANGE), DAC_SLOT, DAC_CMD_OUT_CHANNEL);
+
   // Configure A2D
   Serial.print(F("\nP1-04AD Config:")); Serial.println(P1.configureModule(P1_04AD_CONFIG, P104AD_MODULE_NUM));
+
+
   
   gpio_config();  
 
@@ -494,8 +525,8 @@ static void LogToFile(bool print, int counter)
 {
   memset(logBuffer,0,LOG_BUFF_LEN);
   sprintf(logBuffer, 
-          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d",
-           counter, edgeVin, lvdtVin[1], period, wcdes, Kp, potScale, counts );
+          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d",
+           counter, edgeVin, lvdtVin[1], cmd, period, wcdes, Kp, potScale, counts );
 
  
   // open the file. note that only one file can be open at a time,
