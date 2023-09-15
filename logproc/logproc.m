@@ -1,8 +1,8 @@
 clear
 %close all
 
-load '139.txt'
-A=X139;
+load '143.txt'
+A=X143;
 
 ticks = A(:,1)-A(1,1);
 h=0.01;   % 1s sampling interval

@@ -60,6 +60,7 @@
 
 #define CMD_MAX  5.0
 #define CMD_MIDRANGE 5.0
+#define CMD_IDLE_INC 0.05
 
 #define LVDT_VRANGE    10
 #define EDGE_VRANGE    20
@@ -152,7 +153,7 @@ float serr=0.0;      // speed error: inner loop reference
 float u=0.0;         // proportional action
 float ui=0.0;        // inegral control action
 float cmd=0.0;       // command output to solenoid valve amplifier
-
+float idle_cmd = CMD_MIDRANGE;
 
 // Speed circuit
 // Create HSC class object for slot 2. 
@@ -257,8 +258,6 @@ void TimerHandler()
   // offset for 0-10 V wandfluh valve amp input. the amp will map 5-0V one way and 5-10V the other.
 	cmd = cmd + CMD_MIDRANGE;
 
-  
-  P1.writeAnalog(CMD_COUNTS(cmd), DAC_SLOT, DAC_CMD_OUT_CHANNEL); //writes analog data to P1 output module
 
   ticks++;
 
@@ -333,6 +332,10 @@ void TimerHandler()
  #if 1 
   if(period < MAX_IDLER_DRUM_PERIOD)
   {
+
+     // write the command
+    P1.writeAnalog(CMD_COUNTS(cmd), DAC_SLOT, DAC_CMD_OUT_CHANNEL); //writes analog data to P1 output module
+
 	  Kp = potScale*min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
    	Ki = bz*Kp;  // Kp / Ti;
 
@@ -343,6 +346,20 @@ void TimerHandler()
   {
     Kp = 0;
     Ki = 0;
+
+    // maintain idle
+    if (ddtLvdt > 0)
+    {
+      idle_cmd -= CMD_IDLE_INC;
+    }
+    else if (ddtLvdt < 0)
+    {
+      idle_cmd += CMD_IDLE_INC;
+    }
+
+    // write the command
+    P1.writeAnalog(CMD_COUNTS(idle_cmd), DAC_SLOT, DAC_CMD_OUT_CHANNEL); //writes analog data to P1 output module
+ 
     P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);     // green off
     P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red panel LED ON
   }
@@ -352,6 +369,8 @@ void TimerHandler()
   Ki = bz*Kp;  // Kp / Ti;
 #endif
 
+
+ 
 }
 
 #define BC_STR_LEN 20
