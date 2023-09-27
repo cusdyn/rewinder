@@ -70,6 +70,13 @@
 #define CMD_COUNTS(x)   (x*4095.0/(float)CMD_VRANGE)
 #define DLVDT(x1,x2)     ((x2-x1)*SAMPLE_RATE)
 
+#define INNER_LOOP_GAIN 1
+
+#define HOLD_SWITCH_BIT 0x01
+#define HOLD_LEFT_BIT   0x02
+#define HOLD_RIGHT_BIT  0x04
+#define LVDT_REF_DELTA  0.01   // trying for 1 cm/sec on button hold
+
 
 
 /* 
@@ -135,8 +142,8 @@ float ddtLvdt = 0;
 // Control parameters  ... see outerpi.m
 float Kpe   = .0254;   // Kl/Keg = (80 V/meter)/(3149.6 V/M) scales edge guide to LVDT 
 float bz    = 0.0858;   // zero location
-float Kpmax = 7;    // max proportional gain regardless of web speed 
-float wcmax = 3;     // open-loop crossover for Kpmax   11
+float Kpmax = 23; //7;    // max proportional gain regardless of web speed 
+float wcmax = 10; //3;     // open-loop crossover for Kpmax   11
 
 // variable gains
 float wcdes;  
@@ -145,6 +152,11 @@ float wcdes;
 float tdelay = 0;        // no estimate for web speed until idler period measured
 float Kp=0;              // loop will calculate gains
 float Ki=0;
+float Kin=INNER_LOOP_GAIN;
+
+// hold mode: fixed gains closed loop on LVDT
+float Kph  = 10;
+float Kih = 25;
 
 // control variables
 float perr=0.0;      // position error: outer loop
@@ -159,11 +171,12 @@ float cmd=0.0;       // command output to solenoid valve amplifier
 // It also automatically creates 2 P1_HSC_CHANNEL objects for this slot
 P1_HSC_Module HSC(2); 
 
-bool  printCounts = false;
+
 int   lastCounts   = 0;
 int   counts       = 0;
 int   speed_ticks  = 0;
 float period=MAX_IDLER_DRUM_PERIOD;   // intialize slow
+float last_period = MAX_IDLER_DRUM_PERIOD;
 bool  pulseAction=false;
 
 /* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
@@ -209,46 +222,115 @@ SAMDTimer ITimer(SELECTED_TIMER);
 
 unsigned int loopTick=0;
 float potScale;
-#define LOG_BUFF_LEN 50
+#define LOG_BUFF_LEN 100
 char logBuffer[LOG_BUFF_LEN];
 
 static unsigned long lastTimer   = 0; 
 static bool timerStopped         = false;
 static bool ledToggle            = true;
 
+// hold switch logic
+bool too_slow = true;
+
+// hold switch
+uint8_t  hold_switch=0;
+bool     holding=false;
+float    lvdtRef=0;
+
+inline void process_hold_switch()
+{
+  hold_switch = HSC.CNT2.readInputs();
+  if(((hold_switch & HOLD_SWITCH_BIT) == HOLD_SWITCH_BIT) && (holding==false))
+  {
+    digitalWrite(PIN_A2,1);
+    holding = true;
+
+    // latch current LVDT as edge-equivalent position reference.
+    lvdtRef = lvdtVin[1];
+
+    // kill the shared integrator
+    ui = 0;
+  }
+  else if (((hold_switch & HOLD_SWITCH_BIT) != HOLD_SWITCH_BIT) && (holding==true))
+  {
+    digitalWrite(PIN_A2,0);
+    holding = false;
+
+    // kill the shared integrator
+    ui = 0;
+  }
+
+  if( holding == true )
+  {
+    if((hold_switch & HOLD_LEFT_BIT) == HOLD_LEFT_BIT)
+    {
+      lvdtRef -= LVDT_REF_DELTA;
+    }
+
+    if((hold_switch & HOLD_RIGHT_BIT) == HOLD_RIGHT_BIT)
+    {
+      lvdtRef += LVDT_REF_DELTA;
+    }
+  }
+}
 
 
 void TimerHandler()
 {
-  static bool toggle = false;
+  //timer interrupt pin toggle
+  digitalWrite(PIN_A1,1);
+
+
 
   // Sensor input
   lvdtVin[1] = LVDT_VOLTS(P1.readAnalog(1,LVDT_VIN_CHANNEL));
   edgeVin    = EDGE_VOLTS(P1.readAnalog(1,EDGE_VIN_CHANNEL));
+  // Gain scale pot wiper nominal is 50% full scale = 1 multiplier.
+  // 5-0V scales down 1 to zero. 5-10V scales multiplier  1 to 2
+  potScale    = 2.0*P1.readAnalog(1,POT_VIN_CHANNEL)/(float)(COUNT_RANGE);
 
   // LVDT rate: numerical differentiation
   ddtLvdt = DLVDT(lvdtVin[0],lvdtVin[1]);
   lvdtVin[0] = lvdtVin[1];  // propagate LVDT state
 
-  // position error from edge guide in LVDT space
-  perr = -edgeVin*Kpe;   // map edge guide voltage to LVDT equivalent
+  if( holding == true)
+  {
+    // close loop on rack only. no EdgeGuide
+    perr = lvdtRef - lvdtVin[1];
 
-	// P term
-	u = Kp*perr;
+    // P term
+    u = Kph*perr;
 
-	// I term: integrator on outer loop handles Edge Guide saturation:
-  // it integrated back to linear output region around the null point.
-	ui = ui + (Ki*perr)/SAMPLE_RATE;
+    ui = ui + (Kih*perr)/SAMPLE_RATE;
 
-  // clamp integrator
-  ui = max(ui, -CMD_MAX);
-  ui = min(ui, CMD_MAX);
+    // clamp integrator
+    ui = max(ui, -CMD_MAX);
+    ui = min(ui, CMD_MAX);
 
-  // speed error: inner loop reference
-	serr = (u + ui) - ddtLvdt;
+    cmd = u + ui;
+  }
+  else
+  {
+    // position error from edge guide in LVDT space
+    perr = -edgeVin*Kpe;   // map edge guide voltage to LVDT equivalent
 
-	// unity gain on inner loop so command output to valve amp is just this...
-	cmd = serr;
+    // P term
+    u = Kp*perr;
+
+    // I term: integrator on outer loop handles Edge Guide saturation:
+    // it integrated back to linear output region around the null point.
+    ui = ui + (Ki*perr)/SAMPLE_RATE;
+
+    // clamp integrator
+    ui = max(ui, -CMD_MAX);
+    ui = min(ui, CMD_MAX);
+
+    // speed error: inner loop reference
+    serr = (u + ui) - ddtLvdt;
+
+    // unity gain on inner loop so command output to valve amp is just this...
+    cmd = Kin*serr;
+  }
 
   // clamp to +- maximum command
   cmd = max(cmd, -CMD_MAX);
@@ -263,22 +345,25 @@ void TimerHandler()
   ticks++;
 
 
-  //timer interrupt pin toggle
-  digitalWrite(PIN_A1,toggle);
-  toggle = !toggle;
 
   // read input side web idler pulse counter
-  counts = HSC.CNT1.readPosition();
-  
+  counts      = HSC.CNT1.readPosition();
+  process_hold_switch();
+
   speed_ticks++; // increment period counter
   
   if( counts == (lastCounts+1))
   {
     // completed a rotation
     lastCounts = counts;
-    //printCounts = true;
-
+    
     period = float(speed_ticks)/SAMPLE_RATE;
+
+    if(abs(period-last_period) > 0.1)
+    {
+      last_period = period;
+      ui=0;   // kill the integrator
+    }
 
     wcdes = WC_DES_FACTOR/period;
     speed_ticks=0;  
@@ -307,9 +392,6 @@ void TimerHandler()
 
 
 
-  // Gain scale pot wiper nominal is 50% full scale = 1 multiplier.
-  // 5-0V scales down 1 to zero. 5-10V scales multiplier  1 to 2
-  potScale    = 2.0*P1.readAnalog(1,POT_VIN_CHANNEL)/(float)(COUNT_RANGE);
 
   /* SCALE GAIN Kp = Kpmax * 10 ^ (log10(wc / wmax))
 
@@ -333,24 +415,42 @@ void TimerHandler()
  #if 1 
   if(period < MAX_IDLER_DRUM_PERIOD)
   {
+    if(too_slow==true)
+    {
+        // one time write on state change
+        P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);   // green panel LED on
+        P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // green off
+        too_slow = false;
+    }
+
+  
 	  Kp = potScale*min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
    	Ki = bz*Kp;  // Kp / Ti;
-
-    P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);   // green panel LED on
-    P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red off
+    Kin = INNER_LOOP_GAIN;
   }
-  else
+  else  // too slow
   {
-    Kp = 0;
-    Ki = 0;
-    P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);     // green off
-    P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red panel LED ON
+    if(too_slow==false)
+    {
+        // one time write on state change
+        P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);   // red panel LED on
+        P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);  // green off
+        too_slow = true;
+    }
+
+    // Kill the gain and the integrator
+    Kp  = 0;
+    Ki  = 0;
+    Kin = 0;
+    ui  = 0;
   }
 #else
   // test no gain scaling for speed.
   Kp = potScale*Kpmax;
   Ki = bz*Kp;  // Kp / Ti;
 #endif
+
+  digitalWrite(PIN_A1,0);
 
 }
 
@@ -402,13 +502,24 @@ void setup()
   HSC.CNT1.mode = stepDirection;  //quad4x, quad1x
   HSC.CNT1.polarity = positiveDirection;  //negativeDirection
 
+  HSC.CNT2.isRotary = false;
+  HSC.CNT2.enableZReset = false;
+  HSC.CNT2.inhibitOn = false; //oneZ, threeIn, twoZ, fourIn
+  HSC.CNT2.mode = stepDirection;  //quad4x, quad1x
+  HSC.CNT2.polarity = positiveDirection;  //negativeDirection
 
   HSC.configureChannels();  //Load settings into HSC module. Leave argument empty to use default CNT1 and CNT2 
 
   HSC.CNT1.setPosition(1000); //Initialise positions
+  HSC.CNT1.setPosition(2000); //Initialise positions
 
   // BIAS the potentiometer dial
   P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_POT_OUT_CHANNEL);
+
+  // default the status LEDs
+  P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);   // red panel LED on
+  P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);  // green off
+
 
   // log file management...
   bcFile = SD.open("bc.txt");
@@ -488,26 +599,10 @@ void loop()
   digitalWrite(LED_BUILTIN, ledToggle);
   ledToggle = !ledToggle;
 
-  if( printCounts )
-  {
-    Serial.print("Counts : ");
-    Serial.print(counts);
-    Serial.print("Period : ");
-    Serial.print(period);
-    Serial.print("Wcdes: ");
-    Serial.print(wcdes);
-    Serial.println();   //print a blank line to look more organized
-
-    printCounts=false;
-  }
-
-
-  
   LogToFile(true, ticks);
 
 
   loopTick++;
-  
 
   delay(1000);
 }
@@ -517,18 +612,20 @@ void gpio_config(void)
 {
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_A1, OUTPUT);
+  pinMode(PIN_A2, OUTPUT);
+
 }
 
 
 
 static void LogToFile(bool print, int counter)
 {
-  memset(logBuffer,0,LOG_BUFF_LEN);
+//  memset(logBuffer,0,LOG_BUFF_LEN);
   sprintf(logBuffer, 
-          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d",
-           counter, edgeVin, lvdtVin[1], cmd, period, wcdes, Kp, potScale, counts );
+          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d, %d, %4.2f, %4.2f",
+           counter, edgeVin, lvdtVin[1], cmd, period, last_period, wcdes, Kp, potScale, counts, hold_switch, u, ui );
 
- 
+ #if 1
   // open the file. note that only one file can be open at a time,
   // so you have to close this one before opening another.
   File dataFile = SD.open(logFileName, FILE_WRITE);
@@ -551,6 +648,9 @@ static void LogToFile(bool print, int counter)
     // try to initialize the SD card again...
     sd_init();
   }
+#else
+  Serial.println(logBuffer);
+#endif
 
 }
 

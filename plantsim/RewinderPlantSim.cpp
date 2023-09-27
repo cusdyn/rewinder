@@ -123,6 +123,7 @@ float RewinderPlantSim::EdgeGuideModel(float vlvdt, float idlerPeriod)
 	}
 
 	return vout;
+
 }
 
 void RewinderPlantSim::LogFilesOut(void)

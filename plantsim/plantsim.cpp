@@ -171,7 +171,7 @@ int main()
 				SpeedPulsePeriod = max(SpeedPulsePeriod-10, 10);
 				period = 2 * SpeedPulsePeriod / (float)SAMPLE_RATE;
 
-				std::cout << "speedPulsePeriod:" << period << "fpm:" << 197*0.75/period << std::endl;
+				std::cout << "speedPulsePeriod:" << period << " fpm: " << 197*0.75/period << std::endl;
 				break;
 			case 'g':
 				SpeedPulsePeriod = max(SpeedPulsePeriod - 1, 1);
