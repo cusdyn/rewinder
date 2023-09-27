@@ -176,7 +176,6 @@ int   lastCounts   = 0;
 int   counts       = 0;
 int   speed_ticks  = 0;
 float period=MAX_IDLER_DRUM_PERIOD;   // intialize slow
-float last_period = MAX_IDLER_DRUM_PERIOD;
 bool  pulseAction=false;
 
 /* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
@@ -359,11 +358,6 @@ void TimerHandler()
     
     period = float(speed_ticks)/SAMPLE_RATE;
 
-    if(abs(period-last_period) > 0.1)
-    {
-      last_period = period;
-      ui=0;   // kill the integrator
-    }
 
     wcdes = WC_DES_FACTOR/period;
     speed_ticks=0;  
@@ -622,8 +616,8 @@ static void LogToFile(bool print, int counter)
 {
 //  memset(logBuffer,0,LOG_BUFF_LEN);
   sprintf(logBuffer, 
-          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d, %d, %4.2f, %4.2f",
-           counter, edgeVin, lvdtVin[1], cmd, period, last_period, wcdes, Kp, potScale, counts, hold_switch, u, ui );
+          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d, %d, %4.2f, %4.2f",
+           counter, edgeVin, lvdtVin[1], cmd, period, wcdes, Kp, potScale, counts, hold_switch, u, ui );
 
  #if 1
   // open the file. note that only one file can be open at a time,
