@@ -75,7 +75,7 @@
 #define HOLD_SWITCH_BIT 0x01
 #define HOLD_LEFT_BIT   0x02
 #define HOLD_RIGHT_BIT  0x04
-#define LVDT_REF_DELTA  0.01   // trying for 1 cm/sec on button hold
+#define LVDT_REF_DELTA  0.002   // trying for 1 cm/sec on button hold
 
 
 
@@ -142,8 +142,8 @@ float ddtLvdt = 0;
 // Control parameters  ... see outerpi.m
 float Kpe   = .0254;   // Kl/Keg = (80 V/meter)/(3149.6 V/M) scales edge guide to LVDT 
 float bz    = 0.0858;   // zero location
-float Kpmax = 23; //7;    // max proportional gain regardless of web speed 
-float wcmax = 10; //3;     // open-loop crossover for Kpmax   11
+float Kpmax = 7;  //23;   // max proportional gain regardless of web speed 
+float wcmax = 3;  //10;     // open-loop crossover for Kpmax   11
 
 // variable gains
 float wcdes;  
@@ -155,8 +155,8 @@ float Ki=0;
 float Kin=INNER_LOOP_GAIN;
 
 // hold mode: fixed gains closed loop on LVDT
-float Kph  = 10;
-float Kih = 25;
+float Kph  = 3;  //10
+
 
 // control variables
 float perr=0.0;      // position error: outer loop
@@ -182,7 +182,7 @@ bool  pulseAction=false;
  *  Channel 1=0-10V
  *  Channel 2=+-10V
  *  Channel 3=0-10V
- *  Channel 4=+-10V
+ *  Channel 4=0-20mA
  */
 const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x22, 0x01, 0x00, 0x00, 0x23, 0x03 };
 
@@ -247,7 +247,7 @@ inline void process_hold_switch()
     // latch current LVDT as edge-equivalent position reference.
     lvdtRef = lvdtVin[1];
 
-    // kill the shared integrator
+    // kill the integrator
     ui = 0;
   }
   else if (((hold_switch & HOLD_SWITCH_BIT) != HOLD_SWITCH_BIT) && (holding==true))
@@ -255,7 +255,7 @@ inline void process_hold_switch()
     digitalWrite(PIN_A2,0);
     holding = false;
 
-    // kill the shared integrator
+    // kill the integrator
     ui = 0;
   }
 
@@ -294,19 +294,17 @@ void TimerHandler()
 
   if( holding == true)
   {
+    // only need P gain because performance is observed
+    // and held after manual jog. Steady state error not relevant
+    // and integrator dynamics disadvantageous for manual jog.
+
     // close loop on rack only. no EdgeGuide
     perr = lvdtRef - lvdtVin[1];
 
     // P term
     u = Kph*perr;
 
-    ui = ui + (Kih*perr)/SAMPLE_RATE;
-
-    // clamp integrator
-    ui = max(ui, -CMD_MAX);
-    ui = min(ui, CMD_MAX);
-
-    cmd = u + ui;
+    cmd = u;
   }
   else
   {
@@ -505,8 +503,7 @@ void setup()
   HSC.configureChannels();  //Load settings into HSC module. Leave argument empty to use default CNT1 and CNT2 
 
   HSC.CNT1.setPosition(1000); //Initialise positions
-  HSC.CNT1.setPosition(2000); //Initialise positions
-
+  
   // BIAS the potentiometer dial
   P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_POT_OUT_CHANNEL);
 
