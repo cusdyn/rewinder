@@ -75,7 +75,8 @@
 #define HOLD_SWITCH_BIT 0x01
 #define HOLD_LEFT_BIT   0x02
 #define HOLD_RIGHT_BIT  0x04
-#define LVDT_REF_DELTA  0.002   // trying for 1 cm/sec on button hold
+#define LVDT_REF_DELTA_RIGHT  0.004   // trying for 1 cm/sec on button hold
+#define LVDT_REF_DELTA_LEFT  0.002   // trying for 1 cm/sec on button hold
 
 
 
@@ -263,12 +264,11 @@ inline void process_hold_switch()
   {
     if((hold_switch & HOLD_LEFT_BIT) == HOLD_LEFT_BIT)
     {
-      lvdtRef -= LVDT_REF_DELTA;
+      lvdtRef -= LVDT_REF_DELTA_LEFT;
     }
-
-    if((hold_switch & HOLD_RIGHT_BIT) == HOLD_RIGHT_BIT)
+    else if((hold_switch & HOLD_RIGHT_BIT) == HOLD_RIGHT_BIT)
     {
-      lvdtRef += LVDT_REF_DELTA;
+      lvdtRef += LVDT_REF_DELTA_RIGHT;
     }
   }
 }
