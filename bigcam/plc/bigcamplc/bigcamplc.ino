@@ -10,6 +10,7 @@
 // Select only one to be true for SAMD21. Must must be placed at the beginning before #include "SAMDTimerInterrupt.h"
 #define USING_TIMER_TC3         true      // Only TC3 can be used for SAMD51
 
+
 /////////////////////////////////////////////////////////////////
 
 #include "SAMDTimerInterrupt.h"
@@ -22,17 +23,16 @@
 #include <string.h>
 
 /* SLOT
-
-   _____  __1__ __2__ __3__ __4__
-	|  P  ||  P  |  P  |  P  |  P  | 
-	|  1  ||  1  |  1  |  1  |  1  | 
-	|  A  ||  0  |  0  |  0  |  1  |
-	|  M  ||  4  |  2  |  4  |  5  |
-	|  -  ||  A  |  H  |  D  |  D  |
-	|  1  ||  D  |  S  |  A  |  D  |
-	|  0  ||     |  C  |  L  |  1  |
-	|  0  ||     |     |  2  |     |
-	 ¯¯¯¯¯  ¯¯¯¯¯ ¯¯¯¯¯ ¯¯¯¯¯ ¯¯¯¯¯
+   _____  __1__ __2__ __3__ __4__ __5__
+	|  P  ||  P  |  P  |  P  |  P  |  P  |
+	|  1  ||  1  |  1  |  1  |  1  |  1  |
+	|  A  ||  0  |  0  |  0  |  1  |  1  |
+	|  M  ||  4  |  2  |  4  |  5  |  5  |
+	|  -  ||  A  |  H  |  D  |  D  |  C  |
+	|  1  ||  D  |  S  |  A  |  D  |  D  |
+	|  0  ||     |  C  |  L  |  1  |  D  |
+	|  0  ||     |     |  2  |     |  1  |
+	 ¯¯¯¯¯  ¯¯¯¯¯ ¯¯¯¯¯ ¯¯¯¯¯ ¯¯¯¯¯ ¯¯¯¯¯
 
 */
 
@@ -41,7 +41,7 @@
 #define SAMPLE_RATE              (100.0)
 #define TIMER_INTERVAL_MS        (1000/SAMPLE_RATE)
 
-#define DURATION     60  // seconds
+#define DURATION     20  // seconds
 #define RECORDLENGTH (int)(SAMPLE_RATE*DURATION)
 
 
@@ -56,37 +56,36 @@
 
 #define DAC_SLOT  3
 #define DAC_CMD_OUT_CHANNEL  2
-#define DAC_POT_OUT_CHANNEL  1
 #define DAC_ACTIVE_OUT_CHAN  3
 #define DAC_INACTIVE_OUT_CHAN  4
 
 
 #define LVDT_VIN_CHANNEL 1
 #define EDGE_VIN_CHANNEL 2
-#define POT_VIN_CHANNEL  3
+#define EDGE_IIN_CHANNEL 4
 
-#define CMD_MAX  0.4
+#define CMD_MAX  5.0
 #define CMD_MIDRANGE 5.0
 
-#define LVDT_VRANGE    10
-#define EDGE_VRANGE    20
+
 #define CMD_VRANGE     10
 
-#define LVDT_VOLTS(x)  ((float)LVDT_VRANGE*x/(float)COUNT_RANGE)
-#define EDGE_VOLTS(x)  ((float)EDGE_VRANGE*x/(float)COUNT_RANGE)
+
+
 #define CMD_COUNTS(x)   (x*4095.0/(float)CMD_VRANGE)
-#define DLVDT(x1,x2)     ((x2-x1)*SAMPLE_RATE)
+#define DENC(x1,x2)     ((x2-x1)*SAMPLE_RATE)
 
 #define INNER_LOOP_GAIN 1
 
+#define DIO_SLOT 4
 #define HOLD_SWITCH_BIT 0x01
-#define HOLD_LEFT_BIT   0x02
-#define HOLD_RIGHT_BIT  0x04
-
-#define LVDT_REF_DELTA_RIGHT  0.004   // trying for 1 cm/sec on button hold
-#define LVDT_REF_DELTA_LEFT   0.002   // trying for 1 cm/sec on button hold
+#define HOLD_RIGHT_BIT  0x02
+#define HOLD_LEFT_BIT   0x04
 
 
+#define ENC_COUNTS_PER_INCH   16216
+
+#define BANNER_MIDCOUNT       39321
 
 /* 
 Transport Phase lag given by  TL = -57.3*w*Td
@@ -101,19 +100,20 @@ Speed = IdlerCircumference(C)/RotationPeriodMeasured(T)
 
 wc = (30/57.3)/Td =  (30/57.3)*Speed/L = (30/57.3)*(C/T)/L 
 
-For C = 0.75 meter idler circumference and
-    L = 1.5 meter path length
+For C = 0.6597 meter idler circumference (8.25" dia) and
+    L = 1.5 meter path length  (5 feet)
 
-    (30/57.3)*(C/T)/L = (30/57.3)*(0.75/T)/1.5 = 0.2618   = WC_DES_FACTOR
+    (30/57.3)*(C/T)/L = (30/57.3)*(0.6597/T)/1.5 = 0.2303   = WC_DES_FACTOR
 
     so...
 
     wc = WC_DES_FACTOR/T    where again T is the idler rotation period.
 
 */
-#define WC_DES_FACTOR            (0.2618) 
+#define WC_DES_FACTOR            (0.2303) 
 #define MAX_IDLER_DRUM_PERIOD    (3.0)
 
+#define HOLD_VDRIVE_MAG (2.0)
 // private functions
 static void LogToFile(bool print, int counter);
 static void sd_init(void);
@@ -122,12 +122,8 @@ static void sd_init(void);
 volatile uint32_t preMillisTimer = 0;
 int   ticks=0;
 
-// Sensor sample inputs
-float lvdtVin[2];
-float edgeVin = 0.0;
-
 // numerical differentiation of LVDT
-float ddtLvdt = 0;
+float ddtEnc = 0;
 
 
 /*
@@ -149,10 +145,10 @@ float ddtLvdt = 0;
     bz = b 
 */
 // Control parameters  ... see outerpi.m
-float Kpe   = .0254;   // Kl/Keg = (80 V/meter)/(3149.6 V/M) scales edge guide to LVDT 
-float bz    = 0.0858;   // zero location
-float Kpmax = 7;  //23;   // max proportional gain regardless of web speed 
-float wcmax = 3;  //10;     // open-loop crossover for Kpmax   11
+float Kpe   = .2922;   // Ke/Kb = encoder/edge = [2500*60/(9.25*0.0254)]/[2185*1000]
+float bz    = 0.001;   // zero location
+float Kpmax = .0001;  //23;   // max proportional gain regardless of web speed 
+float wcmax = 2;  //10;     // open-loop crossover for Kpmax   11
 
 // variable gains
 float wcdes;  
@@ -162,16 +158,6 @@ float Kp=0;              // loop will calculate gains
 float Ki=0;
 float Kin=INNER_LOOP_GAIN;
 
-// hold mode: fixed gains closed loop on LVDT
-float Kph  = 0.0001;  //10
-float Kih  = Kph;  //10
-float Kdh  = Kph/10;
-
-int gainscale = 1;
-float bh   = 0.1;  // lag zero location
-float uh[2];
-float eh[2];
-
 // control variables
 float perr=0.0;      // position error: outer loop
 float serr=0.0;      // speed error: inner loop reference
@@ -179,8 +165,8 @@ float u=0.0;         // proportional action
 float ui=0.0;        // inegral control action
 float uih=0.0;        // inegral control action
 float udh=0.0;        // inegral control action
-float cmd=0.0;       // command output to solenoid valve amplifier
-
+float cmd=0.0;       // signed command
+float vcmd=0.0;      // voltage command out to VFD
 
 // Speed circuit
 // Create HSC class object for slot 2. 
@@ -191,21 +177,25 @@ P1_HSC_Module HSC(2);
 int            lastSpeedCounts   = 0;
 int            speedCounts       = 0;
 
-int   encoderCounts      = 0;
+int   encoderCounts[2];
 int   encoderStart       = 0;
-int   encoderRef         = 2000;
+int   holdPosRef         = 0;
+float holdVdrive         = 0.0;
 
 int   speed_ticks  = 0;
 float period=MAX_IDLER_DRUM_PERIOD;   // intialize slow
 bool  pulseAction=false;
 
+
+int edgeCountsIn = 0;
+
 /* generated using tool at https://facts-engineering.github.io/modules/P1-04AD/P1-04AD.html
- *  Channel 1=0-10V
- *  Channel 2=+-10V
+ *  Channel 1=+-10V    - SIM mode for voltage the represent encoder
+ *  Channel 2=0-10V    - SIM mode for edge sensor
  *  Channel 3=0-10V
- *  Channel 4=0-20mA
+ *  Channel 4=0-20mA   - production mode: Banner 4-20mA edge sensor input
  */
-const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 0x21, 0x00, 0x00, 0x00, 0x22, 0x01, 0x00, 0x00, 0x23, 0x03 };
+const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x21, 0x01, 0x00, 0x00, 0x22, 0x01, 0x00, 0x00, 0x23, 0x03 };
 
 ///////////////////////////////////////////////
 
@@ -241,7 +231,7 @@ const char P1_04AD_CONFIG[] = { 0x40, 0x03, 0x00, 0x00, 0x20, 0x01, 0x00, 0x00, 
 SAMDTimer ITimer(SELECTED_TIMER);
 
 unsigned int loopTick=0;
-float potScale;
+
 #define LOG_BUFF_LEN 150
 char logBuffer[LOG_BUFF_LEN];
 
@@ -255,7 +245,6 @@ bool too_slow = true;
 // hold switch
 uint8_t  hold_switch=0;
 bool     holding=false;
-float    lvdtRef=0;
 bool     force_hold=false;
 
 // sys ID parameters
@@ -268,19 +257,25 @@ struct {
 float sysIdFreq[] = {0.0125, 0.025, 0.05, 0.075, 0.1, 0.125, 0.15, 0.175, 0.2, 0.225, 0.25, 0.275, 0.3, 0.325, 0.35, 0.375, 0.4, 1.0 }; 
 float sysIdAmp[]  = {1.0,3.0,5.0};
 
-unsigned int       encin[RECORDLENGTH];
+float kphold[]    = {0.0, 0.0015,0.002, 0.0021,0.0022,0.0023,0.0024,0.0025,0.0026,0.0027,0.0028,0.0029,0.003};
+
+
+int       encin[RECORDLENGTH];
+int       banner[RECORDLENGTH];
 int dataoutcnt=0;
+int bannercnt=0;
+
+bool logbanner = false;
 
 inline void process_hold_switch()
 {
-  hold_switch = 0;  // HSC.CNT2.readInputs();   // REPLACE this with Discrete input module read
+  hold_switch = P1.readDiscrete(DIO_SLOT);   // REPLACE this with Discrete input module read
   if(((hold_switch & HOLD_SWITCH_BIT) == HOLD_SWITCH_BIT) && (holding==false))
   {
     digitalWrite(PIN_A2,1);
     holding = true;
 
-    // latch current LVDT as edge-equivalent position reference.
-    lvdtRef = lvdtVin[1];
+    holdPosRef = encoderCounts[1] + 2500*4;
 
     // kill the integrator
     ui = 0;
@@ -295,42 +290,55 @@ inline void process_hold_switch()
   }
 
   // process jog button
+  holdVdrive = 0.0;
   if( holding == true )
   {
     if((hold_switch & HOLD_LEFT_BIT) == HOLD_LEFT_BIT)
     {
-      lvdtRef -= LVDT_REF_DELTA_LEFT;
+      holdVdrive = HOLD_VDRIVE_MAG;
     }
     else if((hold_switch & HOLD_RIGHT_BIT) == HOLD_RIGHT_BIT)
     {
-      lvdtRef += LVDT_REF_DELTA_RIGHT;
+      holdVdrive = -HOLD_VDRIVE_MAG; 
+    }
+    else
+    {
+      // if in hold mode but no button down, latch the reference pos
+      holdPosRef = encoderCounts[1];
     }
   }
 }
 
+
+#define SIM_EDGE_V2COUNTS   7502    // counts per volt
 
 void TimerHandler()
 {
   //timer interrupt pin toggle
   digitalWrite(PIN_A1,1);
 
-  encoderCounts      = HSC.CNT2.readPosition();
-  eh[1] = encoderRef + (encoderCounts-encoderStart);
+  encoderCounts[1]      = HSC.CNT2.readPosition() - encoderStart;
 
-  // Sensor input: REPLACE with encoder read and new edge sensor. Let encoder=lvdt
-  lvdtVin[1] = LVDT_VOLTS(P1.readAnalog(1,LVDT_VIN_CHANNEL));
-  edgeVin    = EDGE_VOLTS(P1.readAnalog(1,EDGE_VIN_CHANNEL));
+  edgeCountsIn = P1.readAnalog(1,EDGE_IIN_CHANNEL) - BANNER_MIDCOUNT;
+
+  // rack rate: numerical differentiation
+  ddtEnc = DENC(encoderCounts[0], encoderCounts[1]);
+  encoderCounts[0] = encoderCounts[1];  // propagate LVDT state
+
+  if( logbanner == true )
+  {
+    if( (ticks % 4) == 0 )
+    {
+      if (bannercnt < RECORDLENGTH)
+      {
+        banner[bannercnt]  = edgeCountsIn;
+        bannercnt++;
+      }
+    }
+  }
 
 
-
-  // Gain scale pot wiper nominal is 50% full scale = 1 multiplier.
-  // 5-0V scales down 1 to zero. 5-10V scales multiplier  1 to 2
-  potScale    = 2.0*P1.readAnalog(1,POT_VIN_CHANNEL)/(float)(COUNT_RANGE);
-
-  // LVDT rate: numerical differentiation
-  ddtLvdt = DLVDT(lvdtVin[0],lvdtVin[1]);
-  lvdtVin[0] = lvdtVin[1];  // propagate LVDT state
-
+  process_hold_switch();
 
   if( sysId.active == true )
   {
@@ -340,7 +348,7 @@ void TimerHandler()
     {
       if (dataoutcnt < RECORDLENGTH)
       {
-        encin[dataoutcnt]  = encoderCounts;
+        encin[dataoutcnt]  = encoderCounts[1];
         dataoutcnt++;
       }
     }
@@ -351,28 +359,16 @@ void TimerHandler()
 
     // close loop on rack only. no EdgeGuide
 
-  
+    cmd = holdVdrive;
 
-    //uh[1] = uh[0] + Kph*(eh[1] + eh[0]*((bh/SAMPLE_RATE)-1));
-    uh[1] = Kph*eh[1];
-
-    uih = uih + (Kih*eh[1])/SAMPLE_RATE;
-
-    // clamp integrator
-    uih = max(uih, -CMD_MAX);
-    uih = min(uih, CMD_MAX);
-
-    udh = Kdh*(eh[1]-eh[0])*SAMPLE_RATE;
-
-    cmd = uh[1] + uih + udh;
-
-    uh[0] = uh[1];
-    eh[0] = eh[1];
   }
   else  // closed loop
   {
-    // position error from edge guide in LVDT space
-    perr = -edgeVin*Kpe;   // map edge guide voltage to LVDT equivalent
+
+   
+    // position error from banner edge mapped to encoder space
+    // positive sign because drive sign is opposit encoder and banner sensor sign
+    perr = edgeCountsIn*Kpe;   // map banner counts to encoder counts
 
     // P term
     u = Kp*perr;
@@ -386,10 +382,11 @@ void TimerHandler()
     ui = min(ui, CMD_MAX);
 
     // speed error: inner loop reference
-    serr = (u + ui) - ddtLvdt;
+    serr = (u + ui) - ddtEnc/8000;
 
     // unity gain on inner loop so command output to valve amp is just this...
     cmd = Kin*serr;
+
   }
 
   // clamp to +- maximum command
@@ -397,9 +394,10 @@ void TimerHandler()
 	cmd = min(cmd, CMD_MAX);   
 
   // offset for 0-10 V wandfluh valve amp input. the amp will map 5-0V one way and 5-10V the other.
-	cmd = cmd + CMD_MIDRANGE;
+	vcmd = cmd + CMD_MIDRANGE;
+  //vcmd = CMD_MIDRANGE;
 
-  P1.writeAnalog(CMD_COUNTS(cmd), DAC_SLOT, DAC_CMD_OUT_CHANNEL); //writes analog data to P1 output module
+  P1.writeAnalog(CMD_COUNTS(vcmd), DAC_SLOT, DAC_CMD_OUT_CHANNEL); //writes analog data to P1 output module
 
   ticks++;
 
@@ -407,7 +405,7 @@ void TimerHandler()
 
   // read input side web idler pulse counter
   speedCounts      = HSC.CNT1.readPosition();
-  process_hold_switch();
+  
 
   speed_ticks++; // increment period counter
   
@@ -466,7 +464,7 @@ void TimerHandler()
 
   */
 
- #if 1 
+ #if 0 
   if(period < MAX_IDLER_DRUM_PERIOD)
   {
     if(too_slow==true)
@@ -478,7 +476,7 @@ void TimerHandler()
     }
 
   
-	  Kp = potScale*min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
+	  Kp = min(Kpmax, Kpmax * pow(10, log10(wcdes / wcmax)));
    	Ki = bz*Kp;  // Kp / Ti;
     Kin = INNER_LOOP_GAIN;
   }
@@ -500,7 +498,7 @@ void TimerHandler()
   }
 #else
   // test no gain scaling for speed.
-  Kp = potScale*Kpmax;
+  Kp = Kpmax;
   Ki = bz*Kp;  // Kp / Ti;
 #endif
 
@@ -557,10 +555,6 @@ void setup()
   delay(100);
 
   
-  // Initialize controller
-  lvdtVin[0] = LVDT_VOLTS(P1.readAnalog(1,LVDT_VIN_CHANNEL));
-  
-
 	Kp = Kpmax;  	
 	Ki = bz*Kp;  // Kp / Ti;
 
@@ -584,10 +578,7 @@ void setup()
   HSC.CNT2.setPosition(1000000);
 
 
-  // BIAS the potentiometer dial
-  P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_POT_OUT_CHANNEL);
-
-  // default the status LEDs
+    // default the status LEDs
   P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);   // red panel LED on
   P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);  // green off
 
@@ -661,9 +652,8 @@ void setup()
 
   // initialize controller
   encoderStart = HSC.CNT2.readPosition();
-  uh[0] = 0;
-  eh[0] = 0;
-
+  
+  
   // don't know if this is needed
   delay(100);
 }
@@ -672,6 +662,7 @@ char tmpbuffer[40];
 
 void loop()
 {
+  int index; 
 
   digitalWrite(LED_BUILTIN, ledToggle);
   ledToggle = !ledToggle;
@@ -757,15 +748,37 @@ void loop()
         case 'h':
           force_hold=true;
           break;
-        case 'g':
-          sscanf(&scmd[1][0], "%d", &gainscale);
-          Kph = 0.00001*gainscale;
-          Kih  = Kph;
-          Kdh = Kph/10;
-          break;
         case 'r':
-          sscanf(&scmd[1][0], "%d", &encoderRef);
+          sscanf(&scmd[1][0], "%d", &holdPosRef);
           break;
+        case 'g':
+          P1.writeDiscrete(1,DIO_SLOT,1);
+          break;
+        case 'n':
+          P1.writeDiscrete(0,DIO_SLOT,1);
+          break;  
+        case 'b':
+          // banner log
+          bannercnt=0;
+          logbanner=true;
+          break;
+        case 'v':
+          logbanner=false;
+          bannerSensorLog();
+          break;
+        case 'w':
+          cmd = 5.0;
+          break;
+        case 'e':
+          cmd = -5.0;
+          break; 
+        case 'f':
+          cmd = 0;
+          break;
+        case 'k':
+          sscanf(&scmd[1][0], "%d", &index);
+          Kp = kphold[index];
+          break;                     
         default:
           Serial.println( "Other" );
           break;
@@ -790,6 +803,28 @@ void gpio_config(void)
 
 }
 
+
+
+static void bannerSensorLog(void)
+{
+  int i;
+  char sample[20];
+  File dataFile = SD.open("banner.txt", FILE_WRITE);
+  
+  if (dataFile)
+  {
+    for(i=0; i<bannercnt; i++)
+    {
+      sprintf(sample, "%d", banner[i]);
+      dataFile.println(sample);
+    }
+
+    dataFile.close();
+  }
+
+}
+
+
 static void sysIdLog(void)
 {
   int i;
@@ -801,8 +836,8 @@ static void sysIdLog(void)
   if (dataFile)
   {
     char sample[20];
-    dataFile.println(sysIdAmp[sysId.ampid]);
-    dataFile.println(sysIdFreq[sysId.freqid]);
+    dataFile.println(sysIdAmp[sysId.ampid],6);
+    dataFile.println(sysIdFreq[sysId.freqid],6);
 
 
     for(i=0; i<dataoutcnt; i++)
@@ -825,8 +860,8 @@ static void LogToFile(bool print, int counter)
 {
 //  memset(logBuffer,0,LOG_BUFF_LEN);
   sprintf(logBuffer, 
-          "%d,%5.3f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f,%4.2f, %d, %d, %d, %4.2f, %4.2f, %4.2f, %5.4f, %f",
-           counter, edgeVin, lvdtVin[1], cmd, period, wcdes, Kp, potScale, speedCounts, encoderCounts, hold_switch, u, ui, eh[1], Kph, uih );
+          "%d, %d, %d, %6.1f, %4.2f, %4.4f, %4.4f, %4.2f,%4.2f,%5.3f,%4.2f,%4.2f, %6.5f, %d, %4.2f, %d",
+           counter, edgeCountsIn, encoderCounts[1], ddtEnc, perr, u, ui, cmd, vcmd, period, wcdes, Kp, speedCounts, hold_switch, holdPosRef);
 
  #if 1
   // open the file. note that only one file can be open at a time,
