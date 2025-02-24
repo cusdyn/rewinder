@@ -274,6 +274,7 @@ inline void process_hold_switch()
   {
     digitalWrite(PIN_A2,1);
     holding = true;
+    
 
     holdPosRef = encoderCounts[1] + 2500*4;
 
