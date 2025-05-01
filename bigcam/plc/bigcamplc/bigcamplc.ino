@@ -146,7 +146,7 @@ float ddtEnc = 0;
 */
 // Control parameters  ... see outerpi.m
 float Kpe   = .2922;   // Ke/Kb = encoder/edge = [2500*60/(9.25*0.0254)]/[2185*1000]
-float bz    = 0.001;   // zero location
+float bz    = 0.1;   // zero location
 float Kpmax = .0001;  //23;   // max proportional gain regardless of web speed 
 float wcmax = 2;  //10;     // open-loop crossover for Kpmax   11
 
@@ -269,6 +269,7 @@ bool logbanner = false;
 
 inline void process_hold_switch()
 {
+  
   hold_switch = P1.readDiscrete(DIO_SLOT);   // REPLACE this with Discrete input module read
   if(((hold_switch & HOLD_SWITCH_BIT) == HOLD_SWITCH_BIT) && (holding==false))
   {
@@ -276,9 +277,7 @@ inline void process_hold_switch()
     holding = true;
     
 
-    holdPosRef = encoderCounts[1] + 2500*4;
-
-    // kill the integrator
+       // kill the integrator
     ui = 0;
   }
   else if (((hold_switch & HOLD_SWITCH_BIT) != HOLD_SWITCH_BIT) && (holding==true))
@@ -465,14 +464,14 @@ void TimerHandler()
 
   */
 
- #if 0 
+ #if 0
   if(period < MAX_IDLER_DRUM_PERIOD)
   {
     if(too_slow==true)
     {
         // one time write on state change
         P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);   // green panel LED on
-        P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // green off
+        P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red off
         too_slow = false;
     }
 
@@ -499,6 +498,9 @@ void TimerHandler()
   }
 #else
   // test no gain scaling for speed.
+  P1.writeAnalog(CMD_COUNTS(10.0), DAC_SLOT, DAC_ACTIVE_OUT_CHAN);   // green panel LED on
+  P1.writeAnalog(CMD_COUNTS(0.0), DAC_SLOT, DAC_INACTIVE_OUT_CHAN);  // red off
+
   Kp = Kpmax;
   Ki = bz*Kp;  // Kp / Ti;
 #endif
@@ -861,8 +863,8 @@ static void LogToFile(bool print, int counter)
 {
 //  memset(logBuffer,0,LOG_BUFF_LEN);
   sprintf(logBuffer, 
-          "%d, %d, %d, %6.1f, %4.2f, %4.4f, %4.4f, %4.2f,%4.2f,%5.3f,%4.2f,%4.2f, %6.5f, %d, %4.2f, %d",
-           counter, edgeCountsIn, encoderCounts[1], ddtEnc, perr, u, ui, cmd, vcmd, period, wcdes, Kp, speedCounts, hold_switch, holdPosRef);
+          "%d, %d, %d, %6.1f, %4.2f, %4.4f, %4.4f, %4.3f,%4.3f,%5.3f,%4.2f,%6.5f, %6.5f,%d, %d, %d",
+           counter, edgeCountsIn, encoderCounts[1], ddtEnc, perr, u, ui, cmd, vcmd, period, wcdes, Kp, Ki, speedCounts, hold_switch, holdPosRef);
 
  #if 1
   // open the file. note that only one file can be open at a time,
